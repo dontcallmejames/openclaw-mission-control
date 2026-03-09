@@ -140,7 +140,8 @@ export function NotificationCenter() {
       const [activityRes, pairingRes, alertsRes] = await Promise.all([
         fetch("/api/activity", { cache: "no-store", signal: AbortSignal.timeout(6000) })
           .catch(() => new Response("[]", { status: 200 })),
-        fetch("/api/pairing", { cache: "no-store", signal: AbortSignal.timeout(6000) }),
+        fetch("/api/pairing", { cache: "no-store", signal: AbortSignal.timeout(6000) })
+          .catch(() => new Response("{}", { status: 200 })),
         fetch("/api/usage/alerts?poll=1", { cache: "no-store", signal: AbortSignal.timeout(6000) }).catch(() => null),
       ]);
 

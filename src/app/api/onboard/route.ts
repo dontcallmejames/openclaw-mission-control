@@ -392,6 +392,46 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
+      /* ── get-bot-info ─────────────────────────────── */
+      case "get-bot-info": {
+        const botToken = String(body.token || "").trim();
+        const channel = String(body.channel || "").trim();
+        if (!botToken || !channel) {
+          return NextResponse.json({ ok: false });
+        }
+        try {
+          if (channel === "telegram") {
+            const res = await fetch(`https://api.telegram.org/bot${botToken}/getMe`, {
+              signal: AbortSignal.timeout(5000),
+            });
+            if (res.ok) {
+              const data = await res.json();
+              const bot = data.result;
+              return NextResponse.json({
+                ok: true,
+                username: bot?.username ? `@${bot.username}` : null,
+                name: bot?.first_name || null,
+              });
+            }
+          }
+          if (channel === "discord") {
+            const res = await fetch("https://discord.com/api/v10/users/@me", {
+              headers: { Authorization: `Bot ${botToken}` },
+              signal: AbortSignal.timeout(5000),
+            });
+            if (res.ok) {
+              const bot = await res.json();
+              return NextResponse.json({
+                ok: true,
+                username: bot?.username || null,
+                name: bot?.global_name || bot?.username || null,
+              });
+            }
+          }
+        } catch { /* silent */ }
+        return NextResponse.json({ ok: false });
+      }
+
       default:
         return NextResponse.json(
           { error: `Unknown action: ${action}` },

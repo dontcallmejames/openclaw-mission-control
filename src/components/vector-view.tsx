@@ -5,7 +5,7 @@ import {
   Database, Search, RefreshCw, ChevronDown, ChevronUp, Check,
   AlertTriangle, X, FileText, Hash, Cpu, HardDrive,
   Layers, RotateCcw, Activity, Filter, ArrowUpDown, Eye, Copy,
-  Box, BarChart3, CircleDot, Settings2, Pencil, Save, Lock, KeyRound,
+  Box, BarChart3, CircleDot, Pencil, Save, Lock, KeyRound,
   Zap, Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -33,18 +33,6 @@ type AgentMemory = {
 
 type SearchResult = { path: string; startLine: number; endLine: number; score: number; snippet: string; source: string };
 type Toast = { message: string; type: "success" | "error" };
-
-/** Per OpenClaw docs: API-key providers use the onboarding wizard; models auth login requires provider plugins. */
-function authCommandForProvider(provider: string): string {
-  switch (provider) {
-    case "openai":
-      return "openclaw onboard --auth-choice openai-api-key";
-    case "google":
-      return "openclaw onboard --auth-choice gemini-api-key";
-    default:
-      return "openclaw onboard";
-  }
-}
 
 const EMBEDDING_MODELS: { provider: string; model: string; dims: number; label: string }[] = [
   { provider: "openai", model: "text-embedding-3-small", dims: 1536, label: "OpenAI text-embedding-3-small" },
@@ -296,11 +284,6 @@ function EmbeddingModelEditor({
     () => EMBEDDING_MODELS.filter((m) => m.provider !== "local" && !authProviders.has(m.provider)),
     [authProviders]
   );
-  const lockedProviders = useMemo(
-    () => [...new Set(lockedModels.map((m) => m.provider))],
-    [lockedModels]
-  );
-
   if (!editing) return (
     <div className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm dark:border-[#2c343d] dark:bg-[#171a1d]">
       <div className="flex items-center justify-between">

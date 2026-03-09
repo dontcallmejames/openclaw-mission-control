@@ -147,6 +147,7 @@ export function OnboardingWizard({ onComplete }: Props) {
   const [pairingRequests, setPairingRequests] = useState<DmRequest[]>([]);
   const [approving, setApproving] = useState<string | null>(null);
   const [approved, setApproved] = useState(false);
+  const [botNames, setBotNames] = useState<Record<string, string>>({});
 
   const [error, setError] = useState<string | null>(null);
   const autoValidateRef = useRef<((p: string, key: string) => void) | null>(null);
@@ -278,10 +279,27 @@ export function OnboardingWizard({ onComplete }: Props) {
     if (step !== 3) return;
     fetchPairing();
     pollRef.current = setInterval(fetchPairing, 4000);
+    // Fetch bot names for configured channels
+    for (const ch of configuredChannels) {
+      const token = channelTokens[ch.id]?.trim();
+      if (!token) continue;
+      fetch("/api/onboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "get-bot-info", channel: ch.id, token }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.ok && (data.username || data.name)) {
+            setBotNames((prev) => ({ ...prev, [ch.id]: data.username || data.name }));
+          }
+        })
+        .catch(() => {});
+    }
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [step, fetchPairing]);
+  }, [step, fetchPairing, configuredChannels, channelTokens]);
 
   const handleApprove = useCallback(
     async (channel: string, code: string) => {
@@ -701,7 +719,16 @@ export function OnboardingWizard({ onComplete }: Props) {
                   </h2>
                 </div>
                 <p className="text-sm text-stone-500 dark:text-[#a8b0ba] leading-relaxed">
-                  Send any message to your bot on{" "}
+                  Send any message to your bot
+                  {Object.keys(botNames).length > 0 && (
+                    <>
+                      {" "}
+                      <span className="font-mono text-xs text-stone-700 dark:text-[#d4dae2] font-semibold">
+                        {configuredChannels.map((c) => botNames[c.id]).filter(Boolean).join(" / ")}
+                      </span>
+                    </>
+                  )}
+                  {" "}on{" "}
                   <span className="text-stone-700 dark:text-[#d4dae2] font-medium">
                     {configuredChannels.map((c) => c.label).join(" or ")}
                   </span>
@@ -727,7 +754,7 @@ export function OnboardingWizard({ onComplete }: Props) {
                   </div>
                 </div>
               ) : pairingRequests.length === 0 ? (
-                <PairingWaitState configuredChannels={configuredChannels} />
+                <PairingWaitState configuredChannels={configuredChannels} botNames={botNames} />
               ) : (
                 <div className="space-y-2">
                   {pairingRequests.map((req) => (
@@ -810,7 +837,7 @@ export function OnboardingWizard({ onComplete }: Props) {
 
 // ── Pairing wait state — extracted for clarity ──
 
-function PairingWaitState({ configuredChannels }: { configuredChannels: Channel[] }) {
+function PairingWaitState({ configuredChannels, botNames }: { configuredChannels: Channel[]; botNames: Record<string, string> }) {
   const [scanLine, setScanLine] = useState(0);
 
   // Animate a vertical scan line across the icon area
@@ -849,7 +876,15 @@ function PairingWaitState({ configuredChannels }: { configuredChannels: Channel[
           <span className="font-medium text-stone-700 dark:text-[#d4dae2]">
             {configuredChannels.map((c) => c.label).join(" or ")}
           </span>
-          , find your bot, and send it any message to start pairing.
+          , find{" "}
+          {Object.keys(botNames).length > 0 ? (
+            <span className="font-mono font-semibold text-stone-700 dark:text-[#d4dae2]">
+              {configuredChannels.map((c) => botNames[c.id]).filter(Boolean).join(" / ")}
+            </span>
+          ) : (
+            "your bot"
+          )}
+          {" "}and send it any message to start pairing.
         </p>
       </div>
 

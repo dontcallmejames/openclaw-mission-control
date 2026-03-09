@@ -277,37 +277,6 @@ function ToastBar({ toast, onDone }: { toast: Toast; onDone: () => void }) {
   );
 }
 
-/* ================================================================
-   Restart Banner
-   ================================================================ */
-
-function RestartBanner({ onRestart, onDismiss }: { onRestart: () => void; onDismiss: () => void }) {
-  return (
-    <div className="mx-4 md:mx-6 mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-      <AlertTriangle className="h-5 w-5 shrink-0 text-amber-400" />
-      <div className="flex-1">
-        <p className="text-sm font-medium text-amber-200">
-          Configuration changed — restart recommended
-        </p>
-        <p className="text-xs text-amber-400/70 mt-0.5">
-          Some changes require a gateway restart to take effect.
-        </p>
-      </div>
-      <button
-        onClick={onRestart}
-        className="rounded-lg bg-amber-500/20 px-4 py-1.5 text-xs font-semibold text-amber-200 transition-colors hover:bg-amber-500/30"
-      >
-        Restart Gateway
-      </button>
-      <button
-        onClick={onDismiss}
-        className="rounded p-1 text-amber-500/50 transition-colors hover:text-amber-400"
-      >
-        <X className="h-4 w-4" />
-      </button>
-    </div>
-  );
-}
 
 /* ================================================================
    Field Renderers
@@ -1483,7 +1452,6 @@ export function ConfigEditor() {
   const [, setPendingChanges] = useState<
     Record<string, unknown>
   >({});
-  const [showRestart, setShowRestart] = useState(false);
   const [showRawJson, setShowRawJson] = useState(false);
   /** Raw JSON editor content (when in raw view). Synced when entering raw view. */
   const [rawEditorValue, setRawEditorValue] = useState<string>("");
@@ -1664,7 +1632,6 @@ export function ConfigEditor() {
         setToast({ ok: true, msg: "Configuration saved successfully" });
         setPendingChanges({});
         setDirtyPaths(new Set());
-        setShowRestart(true);
         requestRestart("Configuration was updated — some changes may require a restart.");
         const newConfig = await fetchConfig();
         if (savingFromRaw && newConfig) {
@@ -1679,26 +1646,6 @@ export function ConfigEditor() {
     setSaving(false);
   }, [hasDirty, baseHash, fetchConfig, showRawJson, rawEditorValue, rawViewDirty, rawConfig]);
 
-  /* ── Restart gateway ────────────── */
-
-  const restartGateway = useCallback(async () => {
-    try {
-      const res = await fetch("/api/gateway", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "restart" }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        setToast({ ok: true, msg: "Gateway restart initiated" });
-        setShowRestart(false);
-      } else {
-        setToast({ ok: false, msg: data.error || "Restart failed" });
-      }
-    } catch (err) {
-      setToast({ ok: false, msg: String(err) });
-    }
-  }, []);
 
   /* ── Discard ────────────────────── */
 
@@ -1853,16 +1800,6 @@ export function ConfigEditor() {
             <AlertTriangle className="h-3.5 w-3.5" />
             {fetchWarning}
           </p>
-        </div>
-      )}
-
-      {/* Restart banner */}
-      {showRestart && (
-        <div className="shrink-0 pt-3">
-          <RestartBanner
-            onRestart={restartGateway}
-            onDismiss={() => setShowRestart(false)}
-          />
         </div>
       )}
 

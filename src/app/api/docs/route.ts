@@ -246,7 +246,7 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "not a file" }, { status: 400 });
     }
     await unlink(fullPath);
-    return NextResponse.json({ ok: true, path: safePath, deleted: true });
+    return NextResponse.json({ ok: true, path: filePath, deleted: true });
   } catch (err) {
     console.error("Docs DELETE error:", err);
     return NextResponse.json({ error: String(err) }, { status: 500 });

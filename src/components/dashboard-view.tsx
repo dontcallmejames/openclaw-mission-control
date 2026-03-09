@@ -674,6 +674,7 @@ export function DashboardView() {
   const fetchLive = useCallback(async () => {
     try {
       const res = await fetch("/api/live", { cache: "no-store", signal: AbortSignal.timeout(10000) });
+      if (!res.ok) return;
       const data = await res.json();
       setLive(data);
       setLastRefresh(Date.now());
@@ -751,6 +752,7 @@ export function DashboardView() {
   }
 
   const gw = live.gateway;
+  const maxAgentTokens = Math.max(...live.agents.map((a) => a.totalTokens), 1);
   // Use the shared gateway status store (same source as the header) to avoid
   // conflicting online/offline indicators.  Fall back to /api/live data only
   // while the store is still in its initial "loading" state.
@@ -1125,20 +1127,22 @@ export function DashboardView() {
                         now - agent.lastActivity < 300000 ? "bg-emerald-500" : "bg-muted-foreground/30"
                       )} />
                     </div>
-                    {/* Token usage bar */}
+                    {/* Token usage — relative bar across agents */}
                     <div className="mt-3">
                       <div className="flex justify-between text-xs text-muted-foreground/50">
                         <span>Token usage</span>
                         <span>{formatTokens(agent.totalTokens)}</span>
                       </div>
-                      <div className="mt-1 h-1.5 rounded-full bg-foreground/[0.04]">
-                        <div
-                          className="h-1.5 rounded-full bg-emerald-500/70 transition-all duration-1000"
-                          style={{
-                            width: `${Math.min(100, (agent.totalTokens / 200000) * 100)}%`,
-                          }}
-                        />
-                      </div>
+                      {maxAgentTokens > 0 && (
+                        <div className="mt-1 h-1.5 rounded-full bg-foreground/[0.04]">
+                          <div
+                            className="h-1.5 rounded-full bg-emerald-500/70 transition-all duration-1000"
+                            style={{
+                              width: `${Math.max(4, (agent.totalTokens / maxAgentTokens) * 100)}%`,
+                            }}
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}

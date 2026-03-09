@@ -410,7 +410,7 @@ function EstimatedSpendTable({ rows }: { rows: SpendRow[] }) {
                 />
               </div>
               <span className="text-right text-xs text-[#7a8591]">
-                {row.coveragePct > 0 ? `${Math.round(row.coveragePct * 100)}%` : "—"}
+                {row.coveragePct > 0 ? `${Math.round(row.coveragePct)}%` : "—"}
               </span>
               <span className="text-right font-mono text-sm font-semibold text-[#34d399]">
                 {formatUsd(row.usd)}
@@ -572,8 +572,8 @@ export function UsageView() {
                 value={formatUsd(data.estimatedSpend.totalUsd)}
                 sub={
                   data.coverage.estimatedPricingCoveragePct > 0
-                    ? `${Math.round(data.coverage.estimatedPricingCoveragePct * 100)}% coverage`
-                    : "No pricing data"
+                    ? `${Math.round(data.coverage.estimatedPricingCoveragePct)}% coverage`
+                    : "No pricing data — subscription auth doesn't expose costs"
                 }
                 icon={<DollarSign className="h-4 w-4" />}
                 accent="text-emerald-400"
@@ -648,7 +648,7 @@ export function UsageView() {
                         </p>
                         {windowSpend.coveragePct > 0 && (
                           <span className="rounded-full border border-[#23282e] bg-[#20252a] px-2 py-0.5 text-[10px] text-[#7a8591]">
-                            {Math.round(windowSpend.coveragePct * 100)}% coverage
+                            {Math.round(windowSpend.coveragePct)}% coverage
                           </span>
                         )}
                       </div>

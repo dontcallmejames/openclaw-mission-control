@@ -250,7 +250,12 @@ function isClawhubNotFound(err: unknown): boolean {
   const e = err as NodeJS.ErrnoException;
   if (e?.code === "ENOENT") return true;
   const msg = (e?.message ?? String(err)).toLowerCase();
-  return msg.includes("enoent") && (msg.includes("clawhub") || msg.includes("spawn"));
+  // Direct spawn ENOENT (non-shell mode)
+  if (msg.includes("enoent") && (msg.includes("clawhub") || msg.includes("spawn"))) return true;
+  // Login shell returns exit code 127 when the command is not found
+  const stderr = (e as { stderr?: string })?.stderr?.toLowerCase() ?? "";
+  if (msg.includes("exit code 127") || stderr.includes("command not found") || stderr.includes("not found")) return true;
+  return false;
 }
 
 export async function POST(request: NextRequest) {
