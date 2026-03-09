@@ -667,6 +667,14 @@ function ChatPanel({
     }
   }, [isSelected, isVisible]);
 
+  // Re-focus input after response finishes so user can keep typing
+  useEffect(() => {
+    if (!isLoading && isSelected && isVisible) {
+      const t = setTimeout(() => inputRef.current?.focus(), 50);
+      return () => clearTimeout(t);
+    }
+  }, [isLoading, isSelected, isVisible]);
+
   // Clear unread for this agent when the panel becomes visible and selected
   useEffect(() => {
     if (isSelected && isVisible) {

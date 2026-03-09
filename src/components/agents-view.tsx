@@ -211,7 +211,7 @@ function GatewayNode({ data }: NodeProps) {
       <Handle type="source" position={Position.Right} className="!bg-transparent !border-0 !w-0 !h-0" />
       <Handle type="source" position={Position.Bottom} id="sub" className="!bg-transparent !border-0 !w-0 !h-0" />
       <div className="flex h-20 w-20 items-center justify-center rounded-full border-2 border-[var(--accent-brand-border)] bg-[var(--accent-brand-subtle)] shadow-lg shadow-[var(--accent-brand-ring)]">
-        <span className="text-xl">🦞</span>
+        <img src="/deckard-logo.jpg" alt="Deckard" className="h-12 w-12 rounded-full object-cover" />
       </div>
       <div className="mt-2 text-center">
         <p className="text-xs font-bold text-foreground">Gateway</p>

@@ -1,5 +1,17 @@
 import { getGatewayToken, getGatewayUrl } from "./paths";
 
+/** Create a WebSocket that sends an Origin header (server-side only). */
+function createWebSocket(url: string): WebSocket {
+  if (typeof window === "undefined") {
+    // Server-side: use `ws` package which supports custom headers
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any
+    const WsModule = require("ws") as any;
+    const WsClass = WsModule.default ?? WsModule;
+    return new WsClass(url, undefined, { headers: { Origin: "http://127.0.0.1:3333" } }) as unknown as WebSocket;
+  }
+  return new WebSocket(url);
+}
+
 type GatewayConnectHello = {
   features?: {
     methods?: string[];
@@ -148,7 +160,7 @@ export class GatewayRpcClient {
 
       try {
         const wsUrl = toWsUrl(this.gatewayUrl ?? (await getGatewayUrl()));
-        const ws = new WebSocket(wsUrl);
+        const ws = createWebSocket(wsUrl);
         this.ws = ws;
 
         ws.addEventListener("open", () => {
@@ -258,7 +270,7 @@ export class GatewayRpcClient {
           minProtocol: 3,
           maxProtocol: 3,
           client: {
-            id: "openclaw-dashboard",
+            id: "cli",
             version: "mission-control",
             platform: process.platform,
             mode: "backend",

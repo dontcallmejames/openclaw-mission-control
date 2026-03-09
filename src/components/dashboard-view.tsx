@@ -1144,7 +1144,9 @@ export function DashboardView() {
                   <div key={agent.id} className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm dark:border-[#2c343d] dark:bg-[#171a1d]">
                     <div className="flex items-center gap-3">
                       <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-stone-100 text-base dark:bg-[#20252a]">
-                        {agent.emoji || (agent.id === "main" ? "🦞" : "🤖")}
+                        {agent.id === "main"
+                          ? <img src="/deckard-logo.jpg" alt="Deckard" className="h-7 w-7 rounded-md object-cover" />
+                          : (agent.emoji || "🤖")}
                       </div>
                       <div className="flex-1">
                         <p className="text-sm font-medium text-foreground capitalize">

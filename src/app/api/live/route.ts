@@ -252,7 +252,7 @@ async function readAgentSessions(): Promise<AgentSessionRow[]> {
   ): AgentSessionRow {
     const identity = identityByAgentId.get(id) || {
       name: id,
-      emoji: id === "main" ? "🦞" : "🤖",
+      emoji: id === "main" ? "" : "🤖",
     };
     return { id, name: identity.name, emoji: identity.emoji, sessionCount, totalTokens, lastActivity };
   }

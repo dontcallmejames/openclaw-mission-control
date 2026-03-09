@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { join, dirname } from "path";
+import { writeFile, mkdir } from "fs/promises";
 import { getDefaultWorkspace } from "@/lib/paths";
 import { getClient } from "@/lib/openclaw-client";
 import { gatewayCall } from "@/lib/openclaw";
@@ -41,16 +42,15 @@ type KanbanData = {
 };
 
 async function readKanban(): Promise<KanbanData> {
-  const client = await getClient();
+  const { readFile: fsRead } = await import("fs/promises");
   const kanbanPath = await getKanbanPath();
-  const raw = await client.readFile(kanbanPath);
+  const raw = await fsRead(kanbanPath, "utf-8");
   return JSON.parse(raw) as KanbanData;
 }
 
 async function writeKanban(data: KanbanData): Promise<void> {
-  const client = await getClient();
   const kanbanPath = await getKanbanPath();
-  await client.writeFile(kanbanPath, JSON.stringify(data, null, 2));
+  await writeFile(kanbanPath, JSON.stringify(data, null, 2), "utf-8");
 }
 
 /* ── GET — read existing board ────────────────────── */
@@ -258,18 +258,12 @@ async function handleDispatch(body: { taskId: number; agentId?: string }) {
 /* ── init handler ─────────────────────────────────── */
 
 async function handleInit(body: { starterTasks?: KanbanTask[] }) {
-  const client = await getClient();
   const ws = await getDefaultWorkspace();
   const kanbanPath = join(ws, "kanban.json");
   const tasksMemoryPath = join(ws, "TASKS.md");
 
-  // Ensure workspace directory exists via mkdir through exec
-  try {
-    const dir = dirname(kanbanPath);
-    // Use the client to create the directory if needed
-    // Try writing to kanban first; if the dir doesn't exist the write will error,
-    // but the gateway transport handles directory creation internally.
-  } catch { /* continue */ }
+  // Ensure workspace directory exists
+  await mkdir(ws, { recursive: true });
 
   // ── 1. Create kanban.json with smart starter tasks ──
 
@@ -303,10 +297,7 @@ async function handleInit(body: { starterTasks?: KanbanTask[] }) {
     ],
   };
 
-  await client.writeFile(
-    kanbanPath,
-    JSON.stringify(starterBoard, null, 2)
-  );
+  await writeFile(kanbanPath, JSON.stringify(starterBoard, null, 2), "utf-8");
   notifyKanbanUpdated();
 
   // ── 2. Create TASKS.md — agent instructions ──
@@ -375,7 +366,7 @@ If you are executing a dispatched task, update \`dispatchStatus\` to \`"complete
 - The \`assignee\` field is optional — use the user's name or an agent name if relevant.
 `;
 
-  await client.writeFile(tasksMemoryPath, tasksMemory);
+  await writeFile(tasksMemoryPath, tasksMemory, "utf-8");
 
   return NextResponse.json({
     ok: true,
