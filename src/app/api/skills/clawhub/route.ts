@@ -179,13 +179,21 @@ async function uninstallWorkspaceSkill(slug: string): Promise<{
   return { removedDir, removedLock };
 }
 
+function shellEscape(arg: string): string {
+  return "'" + arg.replace(/'/g, "'\\''") + "'";
+}
+
 async function runClawHub(args: string[], timeout = 30000): Promise<{ stdout: string; stderr: string }> {
   const workspace = getDefaultWorkspaceSync();
   const fullArgs = ["--no-input", "--workdir", workspace, ...args];
-  const { stdout, stderr } = await exec("clawhub", fullArgs, {
+  // Spawn through a login shell so the user's PATH (from ~/.zshrc, ~/.bash_profile, etc.)
+  // is available — fixes "clawhub not found" when the Next.js process has a limited env.
+  const shell = process.env.SHELL || "/bin/sh";
+  const cmd = ["clawhub", ...fullArgs.map(shellEscape)].join(" ");
+  const { stdout, stderr } = await exec(shell, ["-lc", cmd], {
     cwd: workspace,
     timeout,
-    env: { ...process.env, NO_COLOR: "1" },
+    env: { ...process.env, NO_COLOR: "1", OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1" },
   });
   return { stdout, stderr };
 }
@@ -242,7 +250,12 @@ function isClawhubNotFound(err: unknown): boolean {
   const e = err as NodeJS.ErrnoException;
   if (e?.code === "ENOENT") return true;
   const msg = (e?.message ?? String(err)).toLowerCase();
-  return msg.includes("enoent") && (msg.includes("clawhub") || msg.includes("spawn"));
+  // Direct spawn ENOENT (non-shell mode)
+  if (msg.includes("enoent") && (msg.includes("clawhub") || msg.includes("spawn"))) return true;
+  // Login shell returns exit code 127 when the command is not found
+  const stderr = (e as { stderr?: string })?.stderr?.toLowerCase() ?? "";
+  if (msg.includes("exit code 127") || stderr.includes("command not found") || stderr.includes("not found")) return true;
+  return false;
 }
 
 export async function POST(request: NextRequest) {

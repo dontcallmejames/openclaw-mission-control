@@ -78,7 +78,7 @@ async function runDoctor(): Promise<DoctorResult> {
   try {
     const { stdout, stderr } = await exec(bin, args, {
       timeout: 45000,
-      env: { ...process.env, NO_COLOR: "1" },
+      env: { ...process.env, NO_COLOR: "1", OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1" },
     });
     return {
       ok: true,

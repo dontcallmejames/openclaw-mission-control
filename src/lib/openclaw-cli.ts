@@ -4,6 +4,9 @@ import { getOpenClawBin } from "./paths";
 
 const exec = promisify(execFile);
 
+/** Env vars for all CLI subprocesses. Mission Control is always a trusted local process. */
+const CLI_ENV = { ...process.env, NO_COLOR: "1", OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1" };
+
 /** Result of a CLI run when both stdout and stderr are captured. */
 export type RunCliResult = {
   stdout: string;
@@ -22,7 +25,7 @@ export async function runCliCaptureBoth(
   const bin = await getOpenClawBin();
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, {
-      env: { ...process.env, NO_COLOR: "1" },
+      env: CLI_ENV,
       timeout,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -55,7 +58,7 @@ export async function runCli(
     // Use spawn for stdin piping
     return new Promise((resolve, reject) => {
       const child = spawn(bin, args, {
-        env: { ...process.env, NO_COLOR: "1" },
+        env: CLI_ENV,
         timeout,
         stdio: ["pipe", "pipe", "pipe"],
       });
@@ -74,7 +77,7 @@ export async function runCli(
   }
   const { stdout } = await exec(bin, args, {
     timeout,
-    env: { ...process.env, NO_COLOR: "1" },
+    env: CLI_ENV,
   });
   return stdout;
 }

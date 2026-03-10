@@ -53,12 +53,14 @@ import {
   Eye,
   EyeOff,
   RotateCcw,
+  Terminal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { requestRestart } from "@/lib/restart-store";
 import { SectionBody, SectionHeader, SectionLayout } from "@/components/section-layout";
 import { InlineSpinner, LoadingState } from "@/components/ui/loading-state";
 import { SubagentsManagerView } from "@/components/subagents-manager-view";
+import { ModelsView } from "@/components/models-view";
 
 const POSITIONS_STORAGE_KEY = "mc-agents-node-positions";
 
@@ -246,8 +248,8 @@ function AgentNodeComponent({ data }: NodeProps) {
     >
       <Handle type="target" position={Position.Left} className="!bg-primary !border-primary !w-2 !h-2" />
       <Handle type="source" position={Position.Right} className="!bg-blue-500 !border-blue-400 !w-2 !h-2" />
-      <Handle type="source" position={Position.Bottom} id="sub" className="!bg-[var(--accent-brand)] !border-[var(--accent-brand)] !w-2 !h-2" />
-      <Handle type="target" position={Position.Top} id="parent" className="!bg-[var(--accent-brand)] !border-[var(--accent-brand)] !w-2 !h-2" />
+      <Handle type="source" position={Position.Right} id="sub" className="!bg-[var(--accent-brand)] !border-[var(--accent-brand)] !w-2 !h-2" />
+      <Handle type="target" position={Position.Left} id="parent" className="!bg-[var(--accent-brand)] !border-[var(--accent-brand)] !w-2 !h-2" />
 
       {/* Header */}
       <div className="flex items-center gap-2">
@@ -559,11 +561,12 @@ function buildGraph(
     if (dagreGraph) dagreGraph.setEdge(gatewayId, `agent-${sub.id}`);
   }
 
-  // Parent → sub-agent
-  for (const sub of subAgents) {
-    const parent = agents.find((a) => a.subagents.includes(sub.id));
-    if (parent && dagreGraph) {
-      dagreGraph.setEdge(`agent-${parent.id}`, `agent-${sub.id}`);
+  // Parent → sub-agent (register all delegation pairs for dagre)
+  for (const parent of agents) {
+    for (const childId of parent.subagents) {
+      if (agents.some((a) => a.id === childId) && dagreGraph) {
+        dagreGraph.setEdge(`agent-${parent.id}`, `agent-${childId}`);
+      }
     }
   }
 
@@ -660,13 +663,16 @@ function buildGraph(
   }
 
   // ── 3. Sub-agent delegation edges ──
-  for (const sub of subAgents) {
-    const parent = agents.find((a) => a.subagents.includes(sub.id));
-    if (parent) {
+  // Build one edge per (parent → child) delegation relationship.
+  // An agent can be delegated-to by multiple parents, and can itself delegate to others.
+  for (const parent of agents) {
+    for (const childId of parent.subagents) {
+      const child = agents.find((a) => a.id === childId);
+      if (!child) continue;
       edges.push({
-        id: `sub-${parent.id}-${sub.id}`,
+        id: `sub-${parent.id}-${child.id}`,
         source: `agent-${parent.id}`,
-        target: `agent-${sub.id}`,
+        target: `agent-${child.id}`,
         sourceHandle: "sub",
         targetHandle: "parent",
         type: "default",
@@ -2058,7 +2064,7 @@ function ChannelBindingPicker({
     try {
       const res = await fetch("/api/channels?scope=all", { cache: "no-store" });
       const data = await res.json();
-      setChannels((data.channels || []) as ChannelInfo[]);
+      setChannels((data.channels || []).map((c: Record<string, unknown>) => ({ ...c, statuses: Array.isArray(c.statuses) ? c.statuses : [] })) as ChannelInfo[]);
     } catch { /* ignore */ }
     setLoading(false);
   }, []);
@@ -2190,12 +2196,12 @@ function ChannelBindingPicker({
                 Connected channels — click to bind:
               </p>
               <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-                {readyChannels.map((ch) => {
+                {readyChannels.map((ch, idx) => {
                   const status = getStatus(ch);
                   const alreadyBound = bindings.some((b) => b.split(":")[0] === ch.channel);
                   return (
                     <button
-                      key={ch.channel}
+                      key={`${ch.channel}-${idx}`}
                       type="button"
                       onClick={() => {
                         if (alreadyBound) return;
@@ -2234,9 +2240,9 @@ function ChannelBindingPicker({
                   More channels — needs one-time setup:
                 </p>
                 <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-                  {setupChannels.map((ch) => (
+                  {setupChannels.map((ch, idx) => (
                     <button
-                      key={ch.channel}
+                      key={`${ch.channel}-${idx}`}
                       type="button"
                       onClick={() => { setSelectedChannel(ch); setSetupMode(true); }}
                       disabled={disabled}
@@ -2543,6 +2549,60 @@ function FallbackModelsField({
   );
 }
 
+function buildCliCommand(opts: {
+  name: string;
+  model: string;
+  workspace: string;
+  agentDir: string;
+  bindings: string[];
+  setAsDefault: boolean;
+}): string {
+  const parts = ["openclaw agents add", opts.name];
+  if (opts.model) parts.push("--model", opts.model);
+  if (opts.workspace) parts.push("--workspace", opts.workspace);
+  if (opts.agentDir) parts.push("--agent-dir", opts.agentDir);
+  for (const b of opts.bindings) parts.push("--bind", b);
+  if (opts.setAsDefault) parts.push("--default");
+  return parts.join(" ");
+}
+
+function CliCommandPreview({ command, busy }: { command: string; busy: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(command).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [command]);
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-1.5">
+        <Terminal className="h-3 w-3 text-muted-foreground/50" />
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+          Command preview
+        </p>
+      </div>
+      <div className="group relative rounded-lg border border-foreground/10 bg-foreground/[0.03]">
+        <pre className="overflow-x-auto px-3 py-2.5 text-xs font-mono text-foreground/80 leading-relaxed">
+          {command}
+        </pre>
+        <button
+          type="button"
+          onClick={handleCopy}
+          disabled={busy}
+          className="absolute right-2 top-2 rounded-md border border-foreground/10 bg-card px-1.5 py-1 text-muted-foreground/50 opacity-0 transition-opacity hover:text-foreground/70 group-hover:opacity-100 disabled:opacity-0"
+        >
+          {copied ? <CheckCircle className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+        </button>
+      </div>
+      <p className="text-[11px] text-muted-foreground/40">
+        This is the equivalent CLI command that will be executed.
+      </p>
+    </div>
+  );
+}
+
 function AddAgentModal({
   onClose,
   onCreated,
@@ -2571,10 +2631,6 @@ function AddAgentModal({
   const [success, setSuccess] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
-  // Model is now handled by ModelPicker component
-
-  // Channel bindings are now handled by ChannelBindingPicker
-
   useEffect(() => { nameRef.current?.focus(); }, []);
 
   // Close on Escape
@@ -2593,6 +2649,20 @@ function AddAgentModal({
   const removeBinding = useCallback((b: string) => {
     setBindings((prev) => prev.filter((x) => x !== b));
   }, []);
+
+  // Build CLI command from current form state
+  const cliCommand = useMemo(
+    () =>
+      buildCliCommand({
+        name: name.trim(),
+        model,
+        workspace: workspace.trim(),
+        agentDir: agentDir.trim(),
+        bindings,
+        setAsDefault,
+      }),
+    [name, model, workspace, agentDir, bindings, setAsDefault]
+  );
 
   const handleCreate = useCallback(async () => {
     if (!name.trim()) {
@@ -2835,6 +2905,11 @@ function AddAgentModal({
             )}
           </div>
 
+          {/* Command Preview */}
+          {name.trim() && (
+            <CliCommandPreview command={cliCommand} busy={busy} />
+          )}
+
           {/* Error */}
           {error && (
             <div className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-400">
@@ -2875,7 +2950,7 @@ function AddAgentModal({
                   <span className="h-1 w-1 animate-bounce rounded-full bg-current [animation-delay:150ms]" />
                   <span className="h-1 w-1 animate-bounce rounded-full bg-current [animation-delay:300ms]" />
                 </span>
-                Creating...
+                Running...
               </>
             ) : success ? (
               <>
@@ -2884,8 +2959,8 @@ function AddAgentModal({
               </>
             ) : (
               <>
-                <Sparkles className="h-3.5 w-3.5" />
-                Create Agent
+                <Terminal className="h-3.5 w-3.5" />
+                Run & Create Agent
               </>
             )}
           </button>
@@ -3373,7 +3448,7 @@ function EditAgentModal({
               <p className="mt-1 text-xs text-muted-foreground/50">
                 {models.length} authenticated models.{" "}
                 <Link
-                  href="/models"
+                  href="/agents?tab=models"
                   className="text-[var(--accent-brand-text)] hover:text-[var(--accent-brand)]"
                 >
                   Manage providers →
@@ -4052,12 +4127,16 @@ export function AgentsView() {
   const router = useRouter();
   const searchParams = useSearchParams();
   // Unified view mode: flow (org chart), grid (cards), subagents
-  type ViewMode = "flow" | "grid" | "subagents";
-  const initialView: ViewMode =
-    (searchParams.get("tab") || "").toLowerCase() === "subagents" ? "subagents" : "flow";
+  type ViewMode = "flow" | "grid" | "subagents" | "models";
+  const initialView: ViewMode = (() => {
+    const t = (searchParams.get("tab") || "").toLowerCase();
+    if (t === "subagents") return "subagents";
+    if (t === "models") return "models";
+    return "flow";
+  })();
   const [viewMode, setViewMode] = useState<ViewMode>(initialView);
   // Derived helpers for backward compat
-  const tab: "agents" | "subagents" = viewMode === "subagents" ? "subagents" : "agents";
+  const tab: "agents" | "subagents" | "models" = viewMode === "subagents" ? "subagents" : viewMode === "models" ? "models" : "agents";
   const view: "flow" | "grid" = viewMode === "grid" ? "grid" : "flow";
   const [data, setData] = useState<AgentsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -4095,7 +4174,7 @@ export function AgentsView() {
 
   const fetchAgents = useCallback(async () => {
     try {
-      const res = await fetch("/api/agents", { cache: "no-store" });
+      const res = await fetch("/api/agents", { cache: "no-store", signal: AbortSignal.timeout(10000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setData(json);
@@ -4163,17 +4242,18 @@ export function AgentsView() {
 
   const switchView = useCallback((next: ViewMode) => {
     setViewMode(next);
-    // Keep URL in sync for subagents tab (bookmarkable)
+    // Keep URL in sync for subagents/models tabs (bookmarkable)
     const params = new URLSearchParams(searchParams.toString());
     params.delete("section");
     if (next === "subagents") params.set("tab", "subagents");
+    else if (next === "models") params.set("tab", "models");
     else params.delete("tab");
     const query = params.toString();
     router.push(query ? `/agents?${query}` : "/agents");
   }, [router, searchParams]);
 
   useEffect(() => {
-    if (viewMode === "subagents") {
+    if (viewMode === "subagents" || viewMode === "models") {
       setShowAddModal(false);
       setEditingAgentId(null);
       setSelectedWorkspacePath(null);
@@ -4184,9 +4264,16 @@ export function AgentsView() {
 
   const agentCount = data?.agents.length ?? 0;
   const sectionDescription =
-    tab === "agents"
-      ? `${agentCount} agent${agentCount !== 1 ? "s" : ""} configured`
-      : "Subagent orchestration, controls, and defaults";
+    tab === "models"
+      ? "Manage providers, models, and fallbacks"
+      : tab === "subagents"
+        ? "Subagent orchestration, controls, and defaults"
+        : `${agentCount} agent${agentCount !== 1 ? "s" : ""} configured`;
+
+  // Models tab — delegate to ModelsView which has its own layout
+  if (tab === "models") {
+    return <ModelsView />;
+  }
 
   if (loading) {
     return (
@@ -4229,6 +4316,7 @@ export function AgentsView() {
                 { key: "flow" as ViewMode, icon: GitFork, label: "Hierarchy" },
                 { key: "grid" as ViewMode, icon: LayoutGrid, label: "Cards" },
                 { key: "subagents" as ViewMode, icon: Network, label: "Subagents" },
+                { key: "models" as ViewMode, icon: Cpu, label: "Models" },
               ] as const).map(({ key, icon: Icon, label }) => (
                 <button
                   key={key}

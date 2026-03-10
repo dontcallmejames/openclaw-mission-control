@@ -183,6 +183,61 @@ const MODEL_LIST_CONFIG: Record<string, ModelListConfig> = {
   },
 };
 
+/**
+ * Allowlists for providers that return many non-chat models (embeddings, tts,
+ * deprecated, fine-tuned, etc.). Only models matching at least one pattern are
+ * kept. Patterns are tested against the raw model id (without provider prefix).
+ */
+const PROVIDER_MODEL_ALLOWLIST: Record<string, RegExp[]> = {
+  openai: [
+    /^gpt-5/,              // GPT-5 family (5.3-codex, 5.4, 5.4-pro)
+    /^gpt-4\.5/,           // GPT-4.5
+    /^gpt-4\.1(?!-turbo)/,  // GPT-4.1 (still in API, exclude deprecated turbo)
+    /^gpt-4o-mini/,        // GPT-4o mini (budget option, still available)
+    /^o[1-9]/,             // o1, o3, o4-mini reasoning models
+  ],
+  anthropic: [
+    /^claude-opus-4/,      // Claude Opus 4.x (4, 4.1, 4.5, 4.6)
+    /^claude-sonnet-4/,    // Claude Sonnet 4.x (4, 4.5, 4.6)
+    /^claude-haiku-4/,     // Claude Haiku 4.5
+  ],
+  openrouter: [
+    // OpenRouter lists thousands — keep well-known chat families
+    /claude/i,
+    /gpt-4/i,
+    /gpt-5/i,
+    /gemini/i,
+    /llama/i,
+    /mistral/i,
+    /command/i,
+    /deepseek/i,
+    /qwen/i,
+  ],
+};
+
+/** Deny patterns applied after allowlist (blocks fine-tuned, deprecated suffixes, etc.) */
+const PROVIDER_MODEL_DENYLIST: RegExp[] = [
+  /^ft:/,                  // fine-tuned
+  /:(ft-|finetuned)/,
+  /-\d{4}-\d{2}-\d{2}/,  // dated snapshots like gpt-5.4-pro-2026-03-05
+  /-\d{8}$/,              // dated snapshots like claude-opus-4-5-20251101
+  /-\d{4,6}$/,            // old dated suffixes like gpt-4-0613
+  /instruct$/i,           // instruct-only variants
+];
+
+function filterProviderModels(provider: string, models: ProviderModelItem[]): ProviderModelItem[] {
+  const allow = PROVIDER_MODEL_ALLOWLIST[provider];
+  if (!allow) return models; // no allowlist = keep all
+
+  return models.filter((m) => {
+    const rawId = m.id.replace(`${provider}/`, "");
+    const allowed = allow.some((re) => re.test(rawId));
+    if (!allowed) return false;
+    const denied = PROVIDER_MODEL_DENYLIST.some((re) => re.test(rawId));
+    return !denied;
+  });
+}
+
 function parseStandardDataModels(provider: string, data: unknown): ProviderModelItem[] {
   const rows =
     data && typeof data === "object" && Array.isArray((data as { data?: unknown[] }).data)
@@ -297,7 +352,7 @@ export async function fetchModelsFromProvider(
         data && typeof data === "object" && Array.isArray((data as { data?: unknown[] }).data)
           ? (data as { data: Array<{ id?: string; display_name?: string; name?: string }> }).data
           : [];
-      return rows
+      return filterProviderModels(providerId, rows
         .map((row) => {
           const rawId = String(row?.id || "").trim();
           if (!rawId) return null;
@@ -306,14 +361,14 @@ export async function fetchModelsFromProvider(
             name: String(row?.display_name || row?.name || rawId),
           };
         })
-        .filter((row): row is ProviderModelItem => row !== null);
+        .filter((row): row is ProviderModelItem => row !== null));
     }
     case "google": {
       const rows =
         data && typeof data === "object" && Array.isArray((data as { models?: unknown[] }).models)
           ? (data as { models: Array<{ name?: string; displayName?: string; supportedGenerationMethods?: string[] }> }).models
           : [];
-      return rows
+      return filterProviderModels(providerId, rows
         .filter((row) => row.supportedGenerationMethods?.includes("generateContent"))
         .map((row) => {
           const modelName = String(row.name || "").replace(/^models\//, "");
@@ -322,14 +377,15 @@ export async function fetchModelsFromProvider(
             name: String(row.displayName || modelName),
           };
         })
-        .filter((row) => row.id !== "google/");
+        .filter((row) => row.id !== "google/"));
     }
     case "minimax": {
       const parsed = parseStandardDataModels(providerId, data);
-      return parsed.length > 0 ? parsed : config.fallbackModels || [];
+      const models = parsed.length > 0 ? parsed : config.fallbackModels || [];
+      return filterProviderModels(providerId, models);
     }
     default:
-      return parseStandardDataModels(providerId, data);
+      return filterProviderModels(providerId, parseStandardDataModels(providerId, data));
   }
 }
 

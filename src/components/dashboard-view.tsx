@@ -666,16 +666,6 @@ export function DashboardView() {
   const [lastRefresh, setLastRefresh] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const [pairingSummary, setPairingSummary] = useState<PairingSummary | null>(null);
-  const [onboardStatus, setOnboardStatus] = useState<{
-    installed: boolean;
-    configured: boolean;
-  } | null>(null);
-  const [onboardDismissed, setOnboardDismissed] = useState(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("mc-onboard-dismissed") === "1";
-    }
-    return false;
-  });
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { stats: sysStats, connected: sseConnected } = useSystemStats();
@@ -683,7 +673,8 @@ export function DashboardView() {
 
   const fetchLive = useCallback(async () => {
     try {
-      const res = await fetch("/api/live", { cache: "no-store" });
+      const res = await fetch("/api/live", { cache: "no-store", signal: AbortSignal.timeout(10000) });
+      if (!res.ok) return;
       const data = await res.json();
       setLive(data);
       setLastRefresh(Date.now());
@@ -709,10 +700,6 @@ export function DashboardView() {
     fetch("/api/pairing", { cache: "no-store" })
       .then((r) => r.json())
       .then(setPairingSummary)
-      .catch(() => { });
-    fetch("/api/onboard", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((d) => setOnboardStatus({ installed: d.installed, configured: d.configured }))
       .catch(() => { });
 
     const startLivePolling = () => {
@@ -765,6 +752,7 @@ export function DashboardView() {
   }
 
   const gw = live.gateway;
+  const maxAgentTokens = Math.max(...live.agents.map((a) => a.totalTokens), 1);
   // Use the shared gateway status store (same source as the header) to avoid
   // conflicting online/offline indicators.  Fall back to /api/live data only
   // while the store is still in its initial "loading" state.
@@ -792,7 +780,7 @@ export function DashboardView() {
       title: "Gateway is offline",
       detail: "The OpenClaw gateway process is not responding. Most features will not work.",
       fixLabel: "Restart Gateway",
-      fixHref: "/channels",
+      fixHref: "/dashboard",
     });
   }
 
@@ -835,16 +823,6 @@ export function DashboardView() {
     }
   }
 
-  if (system && system.stats.totalChannels === 0) {
-    issues.push({
-      id: "no-channels",
-      severity: "warning",
-      title: "No messaging channels connected",
-      detail: "Connect Telegram, WhatsApp, or another channel to receive agent messages.",
-      fixLabel: "Setup Channel",
-      fixHref: "/agents",
-    });
-  }
 
   if (live.cron.stats.total === 0) {
     issues.push({
@@ -881,49 +859,6 @@ export function DashboardView() {
 
       <SectionBody width="content" padding="regular" innerClassName="space-y-6">
         <div className="space-y-6">
-          {/* ── Onboarding banner ──────────────────────── */}
-          {onboardStatus && !onboardStatus.configured && !onboardDismissed && (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-500/20 dark:bg-emerald-500/10">
-              <div className="flex items-start gap-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-500/15">
-                  <Rocket className="h-4.5 w-4.5 text-emerald-700 dark:text-emerald-300" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">
-                    {onboardStatus.installed
-                      ? "Set up your agent"
-                      : "Install OpenClaw to get started"}
-                  </h3>
-                  <p className="mt-0.5 text-sm text-stone-600 dark:text-stone-300">
-                    {onboardStatus.installed
-                      ? "Configure your AI model and API key to get your agent running."
-                      : "OpenClaw needs to be installed before Mission Control can work."}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Link
-                    href="/onboard"
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-stone-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-stone-700 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-stone-300"
-                  >
-                    {onboardStatus.installed ? "Set up" : "Install"}
-                    <ArrowRight className="h-3 w-3" />
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOnboardDismissed(true);
-                      localStorage.setItem("mc-onboard-dismissed", "1");
-                    }}
-                    className="rounded-md p-1 text-muted-foreground/40 transition-colors hover:text-muted-foreground"
-                    title="Dismiss"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* ── Stat cards ─────────────────────────────── */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             <StatCard
@@ -970,7 +905,7 @@ export function DashboardView() {
           </div>
 
           {/* ── Access & pairing ─── */}
-          <div className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm dark:border-[#2c343d] dark:bg-[#171a1d]">
+          {process.env.NEXT_PUBLIC_AGENTBAY_HOSTED !== "true" && <div className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm dark:border-[#2c343d] dark:bg-[#171a1d]">
             <h2 className="mb-3 flex items-center gap-2 text-xs font-sans font-semibold uppercase tracking-wider text-muted-foreground">
               <KeyRound className="h-3.5 w-3.5" /> Access & pairing
             </h2>
@@ -1013,7 +948,38 @@ export function DashboardView() {
                 )}
               </div>
             </div>
-          </div>
+          </div>}
+
+          {/* ── Pairing Request Banner ──────────────────── */}
+          {(pairingSummary?.total ?? 0) > 0 && (
+            <div className="rounded-xl border border-amber-400/30 bg-amber-500/10 p-4 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-500/20">
+                  <Bell className="h-5 w-5 text-amber-400" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-stone-900 dark:text-[#f5f7fa]">
+                    {pairingSummary?.total === 1
+                      ? "1 pairing request waiting for approval"
+                      : `${pairingSummary?.total} pairing requests waiting for approval`}
+                  </p>
+                  <p className="mt-0.5 text-xs text-stone-600 dark:text-[#a8b0ba]">
+                    Someone messaged your bot — approve the request so your AI can reply.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const bell = document.querySelector("[data-notification-bell]");
+                    if (bell instanceof HTMLElement) bell.click();
+                  }}
+                  className="shrink-0 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-amber-600"
+                >
+                  Review &amp; Approve
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* ── Top Issues Now ─────────────────────────── */}
           {issues.length > 0 && (
@@ -1163,20 +1129,22 @@ export function DashboardView() {
                         now - agent.lastActivity < 300000 ? "bg-emerald-500" : "bg-muted-foreground/30"
                       )} />
                     </div>
-                    {/* Token usage bar */}
+                    {/* Token usage — relative bar across agents */}
                     <div className="mt-3">
                       <div className="flex justify-between text-xs text-muted-foreground/50">
                         <span>Token usage</span>
                         <span>{formatTokens(agent.totalTokens)}</span>
                       </div>
-                      <div className="mt-1 h-1.5 rounded-full bg-foreground/[0.04]">
-                        <div
-                          className="h-1.5 rounded-full bg-emerald-500/70 transition-all duration-1000"
-                          style={{
-                            width: `${Math.min(100, (agent.totalTokens / 200000) * 100)}%`,
-                          }}
-                        />
-                      </div>
+                      {maxAgentTokens > 0 && (
+                        <div className="mt-1 h-1.5 rounded-full bg-foreground/[0.04]">
+                          <div
+                            className="h-1.5 rounded-full bg-emerald-500/70 transition-all duration-1000"
+                            style={{
+                              width: `${Math.max(4, (agent.totalTokens / maxAgentTokens) * 100)}%`,
+                            }}
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1384,6 +1352,23 @@ export function DashboardView() {
           </div>
           <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/40" />
         </Link>
+        {/* ── Contact & support ── */}
+        {process.env.NEXT_PUBLIC_AGENTBAY_HOSTED === "true" && (
+          <div className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm dark:border-[#2c343d] dark:bg-[#171a1d]">
+            <h2 className="mb-2 flex items-center gap-2 text-xs font-sans font-semibold uppercase tracking-wider text-muted-foreground">
+              Need help?
+            </h2>
+            <p className="text-xs text-stone-600 dark:text-[#a8b0ba]">
+              Questions, feedback, or issues? Reach out anytime:
+            </p>
+            <a
+              href="mailto:roberto.sannazzaro@gmail.com"
+              className="mt-2 inline-flex items-center gap-2 text-sm font-medium text-emerald-700 transition-colors hover:text-emerald-600 dark:text-emerald-400 dark:hover:text-emerald-300"
+            >
+              roberto.sannazzaro@gmail.com
+            </a>
+          </div>
+        )}
         {/* ── Build info ── */}
         <div className="pt-2 text-center text-[10px] text-muted-foreground/30">
           Mission Control {process.env.NEXT_PUBLIC_APP_VERSION}

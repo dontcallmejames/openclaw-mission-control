@@ -1,72 +1,41 @@
 /**
- * Lightweight pub/sub store for gateway restart-needed state.
+ * Lightweight gateway restart helper.
  *
  * When any component changes config (cron edits, audio settings, etc.)
- * it calls `requestRestart()` to signal that a gateway restart is needed.
- * The global RestartAnnouncementBar subscribes and renders a prompt.
- *
- * The snapshot object is cached at module level and only recreated when
- * data changes — this is required by useSyncExternalStore which uses
- * Object.is to compare snapshots (new object = always "changed" = infinite loop).
+ * it calls `requestRestart()` which immediately triggers a gateway restart.
+ * No banner or user prompt — restarts happen automatically.
  */
 
-type Listener = () => void;
-type Snapshot = { needed: boolean; reason: string; restarting: boolean };
+import { notifyGatewayRestarting } from "@/lib/gateway-status-store";
 
-let _restartNeeded = false;
-let _reason = "";
-let _restarting = false;
-const _listeners = new Set<Listener>();
+let _pending = false;
 
-/** Cached snapshot — only replaced inside _notify() when state changes */
-let _snapshot: Snapshot = { needed: false, reason: "", restarting: false };
-
-/** Stable server-side snapshot (never changes) */
-const _serverSnapshot: Snapshot = { needed: false, reason: "", restarting: false };
-
-export function requestRestart(reason: string): void {
-  if (_restartNeeded) return; // already showing
-  _restartNeeded = true;
-  _reason = reason;
-  _restarting = false;
-  _notify();
+export function requestRestart(_reason?: string): void {
+  if (_pending) return;
+  _pending = true;
+  notifyGatewayRestarting();
+  fetch("/api/gateway", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "restart" }),
+  })
+    .catch(() => {
+      // ignore — gateway status polling will detect the state
+    })
+    .finally(() => {
+      _pending = false;
+    });
 }
 
-export function dismissRestart(): void {
-  _restartNeeded = false;
-  _reason = "";
-  _restarting = false;
-  _notify();
+// Keep these exports as no-ops so any remaining consumers don't break at runtime.
+export function dismissRestart(): void {}
+export function setRestarting(_val: boolean): void {}
+export function subscribeRestartStore(listener: () => void): () => void {
+  return () => {};
 }
-
-export function setRestarting(val: boolean): void {
-  _restarting = val;
-  _notify();
+export function getRestartSnapshot() {
+  return { needed: false, reason: "", restarting: false };
 }
-
-export function subscribeRestartStore(listener: Listener): () => void {
-  _listeners.add(listener);
-  return () => _listeners.delete(listener);
-}
-
-/** Client snapshot for useSyncExternalStore — returns cached reference */
-export function getRestartSnapshot(): Snapshot {
-  return _snapshot;
-}
-
-/** Server snapshot for useSyncExternalStore — always the same reference */
-export function getServerSnapshot(): Snapshot {
-  return _serverSnapshot;
-}
-
-function _notify(): void {
-  // Create a new snapshot reference so useSyncExternalStore detects the change
-  _snapshot = { needed: _restartNeeded, reason: _reason, restarting: _restarting };
-  for (const l of _listeners) {
-    try {
-      l();
-    } catch {
-      // ignore
-    }
-  }
+export function getServerSnapshot() {
+  return { needed: false, reason: "", restarting: false };
 }

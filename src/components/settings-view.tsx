@@ -14,7 +14,6 @@ import {
   ChevronDown,
   ExternalLink,
   Trash2,
-  RotateCcw,
   Check,
   Clock,
   Globe,
@@ -30,12 +29,7 @@ import {
   SectionLayout,
 } from "@/components/section-layout";
 import { LoadingState } from "@/components/ui/loading-state";
-import {
-  setAutoRestartOnChanges,
-  subscribeAutoRestartPreference,
-  getAutoRestartSnapshot,
-  getAutoRestartServerSnapshot,
-} from "@/lib/auto-restart-preference";
+
 import {
   setTimeFormatPreference,
   subscribeTimeFormatPreference,
@@ -142,12 +136,6 @@ export function SettingsView() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  // Auto-restart preference from existing store
-  const autoRestart = useSyncExternalStore(
-    subscribeAutoRestartPreference,
-    getAutoRestartSnapshot,
-    getAutoRestartServerSnapshot,
-  );
   const timeFormat = useSyncExternalStore(
     subscribeTimeFormatPreference,
     getTimeFormatSnapshot,
@@ -155,7 +143,6 @@ export function SettingsView() {
   );
 
   // Banner reset feedback
-  const [bannerReset, setBannerReset] = useState(false);
 
   // Chat clear feedback
   const [chatCleared, setChatCleared] = useState(false);
@@ -522,61 +509,6 @@ export function SettingsView() {
             </div>
           </SettingRow>
 
-          {/* Auto-restart */}
-          <SettingRow
-            label="Auto-restart gateway on config changes"
-            description="When enabled, the gateway restarts automatically after configuration changes instead of showing a prompt."
-          >
-            <ToggleSwitch
-              checked={autoRestart}
-              onChange={setAutoRestartOnChanges}
-            />
-          </SettingRow>
-
-          {/* Re-run onboarding */}
-          <SettingRow
-            label="Onboarding wizard"
-            description="Re-run the guided setup for model, API key, and channel configuration."
-          >
-            <Link
-              href="/onboard"
-              className="flex items-center gap-1.5 rounded-lg border border-foreground/10 bg-card px-3 py-1.5 text-xs font-medium text-foreground/70 transition-colors hover:bg-muted/80 hover:text-foreground"
-            >
-              <RotateCcw className="h-3 w-3" />
-              Run wizard
-            </Link>
-          </SettingRow>
-
-          {/* Reset banners */}
-          <SettingRow
-            label="Dismissed banners"
-            description="Restore previously dismissed dashboard banners and hints."
-          >
-            <button
-              type="button"
-              onClick={() => {
-                localStorage.removeItem("mc-onboard-dismissed");
-                setBannerReset(true);
-                setTimeout(() => setBannerReset(false), 2000);
-              }}
-              disabled={bannerReset}
-              className={cn(
-                "flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
-                bannerReset
-                  ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
-                  : "border-foreground/10 bg-card text-foreground/70 hover:bg-muted/80 hover:text-foreground",
-              )}
-            >
-              {bannerReset ? (
-                <>
-                  <Check className="h-3 w-3" />
-                  Reset
-                </>
-              ) : (
-                "Reset banners"
-              )}
-            </button>
-          </SettingRow>
         </SettingsSection>
 
         {/* ── Gateway ──────────────────────────────── */}

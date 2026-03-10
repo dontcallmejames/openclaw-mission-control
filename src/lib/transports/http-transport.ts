@@ -2,8 +2,7 @@
  * HTTP transport — talks to the Gateway's HTTP API endpoints.
  *
  * Used for hosted deployments where the platform communicates with
- * tenant Gateway containers over the Docker network, and optionally
- * for self-hosted users who prefer HTTP over CLI subprocesses.
+ * the Gateway over HTTP, and for self-hosted users who prefer HTTP over CLI subprocesses.
  *
  * Primary endpoint: POST /tools/invoke (always enabled on the Gateway)
  * Auth: Authorization: Bearer <OPENCLAW_GATEWAY_TOKEN>

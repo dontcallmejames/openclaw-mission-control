@@ -443,6 +443,7 @@ export async function POST(request: NextRequest) {
         const patch: Record<string, unknown> = {};
 
         if (params.name !== undefined) patch.name = String(params.name);
+        if (params.agentId !== undefined) patch.agentId = String(params.agentId);
 
         let nextPayload: CronJob["payload"] | null = null;
         if (params.message !== undefined || params.model !== undefined) {

@@ -274,6 +274,39 @@ function firstDefault<T extends { isDefault?: boolean }>(rows: T[]): T | null {
   return rows.find((entry) => entry.isDefault) || rows[0] || null;
 }
 
+const DRAFT_KEY = "openclaw:integrations-drafts";
+
+function loadDrafts(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(DRAFT_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveDraft(field: string, value: string) {
+  try {
+    const drafts = loadDrafts();
+    if (value) drafts[field] = value;
+    else delete drafts[field];
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(drafts));
+  } catch { /* quota exceeded — ignore */ }
+}
+
+function clearAllDrafts() {
+  try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+}
+
+/** useState backed by localStorage — saves instantly on every change. */
+function useDraft(field: string, fallback = ""): [string, (v: string) => void] {
+  const [value, setValue] = useState(() => loadDrafts()[field] ?? fallback);
+  const set = useCallback((v: string) => {
+    setValue(v);
+    saveDraft(field, v);
+  }, [field]);
+  return [value, set];
+}
+
 export function IntegrationsView() {
   const searchParams = useSearchParams();
   const [data, setData] = useState<Snapshot | null>(null);
@@ -290,16 +323,16 @@ export function IntegrationsView() {
   const [threadBusy, setThreadBusy] = useState<string | null>(null);
   const [threadDetails, setThreadDetails] = useState<ThreadDetails | null>(null);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
-  const [composeTo, setComposeTo] = useState("");
-  const [composeSubject, setComposeSubject] = useState("");
-  const [composeBody, setComposeBody] = useState("");
-  const [replyBody, setReplyBody] = useState("");
-  const [calendarTitle, setCalendarTitle] = useState("");
-  const [calendarFrom, setCalendarFrom] = useState("");
-  const [calendarTo, setCalendarTo] = useState("");
-  const [calendarLocation, setCalendarLocation] = useState("");
-  const [calendarDescription, setCalendarDescription] = useState("");
-  const [calendarEventId, setCalendarEventId] = useState("");
+  const [composeTo, setComposeTo] = useDraft("composeTo");
+  const [composeSubject, setComposeSubject] = useDraft("composeSubject");
+  const [composeBody, setComposeBody] = useDraft("composeBody");
+  const [replyBody, setReplyBody] = useDraft("replyBody");
+  const [calendarTitle, setCalendarTitle] = useDraft("calendarTitle");
+  const [calendarFrom, setCalendarFrom] = useDraft("calendarFrom");
+  const [calendarTo, setCalendarTo] = useDraft("calendarTo");
+  const [calendarLocation, setCalendarLocation] = useDraft("calendarLocation");
+  const [calendarDescription, setCalendarDescription] = useDraft("calendarDescription");
+  const [calendarEventId, setCalendarEventId] = useDraft("calendarEventId");
   const [notice, setNotice] = useState<string | null>(null);
   const [showGuide, setShowGuide] = useState(false);
   const [showAdvancedTools, setShowAdvancedTools] = useState(false);
@@ -398,6 +431,15 @@ export function IntegrationsView() {
         if (json.warning) setNotice(json.warning);
         if (json.queued) {
           setNotice("Action queued for approval. Review it in the Approval Queue below.");
+        }
+        // Clear drafts after successful send/draft/calendar actions
+        if (action === "gmail-send") {
+          setComposeTo(""); setComposeSubject(""); setComposeBody("");
+        } else if (action === "gmail-reply" || action === "gmail-draft") {
+          setReplyBody("");
+        } else if (action === "calendar-create" || action === "calendar-update") {
+          setCalendarTitle(""); setCalendarFrom(""); setCalendarTo("");
+          setCalendarLocation(""); setCalendarDescription(""); setCalendarEventId("");
         }
         return json;
       } catch (actionError) {

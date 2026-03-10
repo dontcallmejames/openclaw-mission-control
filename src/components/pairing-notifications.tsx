@@ -276,9 +276,14 @@ export function PairingNotifications() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   /* ── Fetch ─────────── */
+  const abortRef = useRef<AbortController | null>(null);
+
   const fetchData = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const res = await fetch("/api/pairing");
+      const res = await fetch("/api/pairing", { signal: controller.signal });
       const d = (await res.json()) as PairingData;
       setData(d);
 
@@ -288,19 +293,20 @@ export function PairingNotifications() {
       }
       prevCountRef.current = d.total;
     } catch {
-      // silent
+      // silent (includes abort)
     }
   }, []);
 
-  // Initial fetch + poll every 15s
+  // Initial fetch + poll every 5s
   useEffect(() => {
     fetchData();
     pollRef.current = setInterval(() => {
       if (document.visibilityState === "visible") {
         void fetchData();
       }
-    }, 15000);
+    }, 5000);
     return () => {
+      abortRef.current?.abort();
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [fetchData]);
@@ -516,7 +522,7 @@ export function PairingNotifications() {
           {/* Footer */}
           <div className="border-t border-foreground/10 px-4 py-2">
             <p className="text-xs text-muted-foreground/60">
-              Polling every 15s &middot; DM codes expire after 1 hour
+              Polling every 5s &middot; DM codes expire after 1 hour
             </p>
           </div>
 

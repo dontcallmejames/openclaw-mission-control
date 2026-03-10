@@ -342,7 +342,10 @@ export async function GET() {
       : [];
 
     // Merge parsed + resolved defaults: prefer resolved for model/workspace
-    const defaultModel = (resolvedDefaults.model || defaults.model) as Record<string, unknown> | undefined;
+    const defaultModelRaw = resolvedDefaults.model || defaults.model;
+    const defaultModel = typeof defaultModelRaw === "string"
+      ? { primary: defaultModelRaw }
+      : (defaultModelRaw as Record<string, unknown> | undefined);
     const defaultPrimary = (defaultModel?.primary as string) || "unknown";
     const defaultFallbacks = (defaultModel?.fallbacks as string[]) || [];
     const defaultWorkspace =
@@ -829,7 +832,9 @@ export async function POST(request: NextRequest) {
               allowAgents: subs,
             };
           } else {
-            delete agent.subagents;
+            // Explicitly set empty allowAgents so the patch clears it
+            // (deleting the key won't override during a config merge).
+            agent.subagents = { allowAgents: [] };
           }
         }
 

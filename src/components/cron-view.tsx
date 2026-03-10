@@ -713,6 +713,8 @@ function EditCronForm({
   onMessageAutoSave?: (message: string) => Promise<void>;
 }) {
   const [name, setName] = useState(job.name);
+  const [agentId, setAgentId] = useState(job.agentId || "main");
+  const [agents, setAgents] = useState<{ id: string; name?: string }[]>([]);
   const [message, setMessage] = useState(job.payload.message || "");
   const [messageSaveStatus, setMessageSaveStatus] = useState<null | "unsaved" | "saving" | "saved">(null);
   const messageSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -764,6 +766,16 @@ function EditCronForm({
     queueMicrotask(() => {
       void fetchTargets();
     });
+    (async () => {
+      try {
+        const res = await fetch("/api/agents");
+        const data = await res.json();
+        setAgents((data.agents || []).map((a: Record<string, unknown>) => ({
+          id: a.id as string,
+          name: a.name as string | undefined,
+        })));
+      } catch { /* ignore */ }
+    })();
   }, [fetchTargets]);
 
   useEffect(() => {
@@ -839,6 +851,7 @@ function EditCronForm({
   const save = async () => {
     const updates: Record<string, unknown> = {};
     if (name !== job.name) updates.name = name;
+    if (agentId !== (job.agentId || "main")) updates.agentId = agentId;
     if (message !== (job.payload.message || "")) updates.message = message;
     if (schedType === "cron" && cronExpr !== (job.schedule.expr || ""))
       updates.cron = cronExpr;
@@ -887,6 +900,24 @@ function EditCronForm({
           className="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-900 outline-none focus:border-emerald-500/30 dark:border-[#2c343d] dark:bg-[#15191d] dark:text-[#f5f7fa]"
         />
       </div>
+
+      {/* Agent */}
+      {agents.length > 1 && (
+        <div>
+          <label className="mb-1 block text-xs font-medium uppercase tracking-wider text-muted-foreground/80">
+            Agent
+          </label>
+          <select
+            value={agentId}
+            onChange={(e) => setAgentId(e.target.value)}
+            className="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-900 outline-none focus:border-emerald-500/30 dark:border-[#2c343d] dark:bg-[#15191d] dark:text-[#f5f7fa]"
+          >
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>{a.name || a.id}</option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {/* Prompt / Message — editable with auto-save like /documents */}
       <div>
@@ -2158,6 +2189,8 @@ export function CronView() {
   );
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchFilter, setSearchFilter] = useState("");
+  const [sortBy, setSortBy] = useState<"name" | "status" | "next" | "last">("next");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [runs, setRuns] = useState<Record<string, RunEntry[]>>({});
   const [runsLoading, setRunsLoading] = useState<string | null>(null);
@@ -2504,6 +2537,38 @@ export function CronView() {
     return j.state.lastStatus === "error";
   });
 
+  // Filter + sort
+  const filteredJobs = useMemo(() => {
+    let list = jobs;
+    if (searchFilter.trim()) {
+      const q = searchFilter.trim().toLowerCase();
+      list = list.filter(
+        (j) =>
+          j.name.toLowerCase().includes(q) ||
+          (j.agentId || "").toLowerCase().includes(q) ||
+          (j.payload.message || "").toLowerCase().includes(q)
+      );
+    }
+    return [...list].sort((a, b) => {
+      switch (sortBy) {
+        case "name":
+          return a.name.localeCompare(b.name);
+        case "status": {
+          const statusOrder = (s: string | undefined) =>
+            s === "error" ? 0 : s === "ok" ? 2 : 1;
+          return statusOrder(a.state.lastStatus) - statusOrder(b.state.lastStatus);
+        }
+        case "last":
+          return (b.state.lastRunAtMs || 0) - (a.state.lastRunAtMs || 0);
+        case "next":
+        default:
+          // Enabled jobs first, then by next run time
+          if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+          return (a.state.nextRunAtMs || Infinity) - (b.state.nextRunAtMs || Infinity);
+      }
+    });
+  }, [jobs, searchFilter, sortBy]);
+
   return (
     <SectionLayout>
       <SectionHeader
@@ -2542,6 +2607,40 @@ export function CronView() {
       />
 
       <SectionBody width="content" padding="compact" innerClassName="space-y-3">
+        {/* Search & Sort controls */}
+        {jobs.length > 1 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-[180px]">
+              <Hash className="absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground/50" />
+              <input
+                type="text"
+                placeholder="Filter jobs..."
+                value={searchFilter}
+                onChange={(e) => setSearchFilter(e.target.value)}
+                className="w-full rounded-lg border border-stone-200 bg-white py-1.5 pl-7 pr-3 text-xs text-stone-900 outline-none placeholder:text-muted-foreground/50 focus:border-emerald-500/30 dark:border-[#2c343d] dark:bg-[#15191d] dark:text-[#f5f7fa]"
+              />
+              {searchFilter && (
+                <button
+                  type="button"
+                  onClick={() => setSearchFilter("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-foreground/70"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+              className="rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs text-stone-600 outline-none dark:border-[#2c343d] dark:bg-[#15191d] dark:text-[#c7d0d9]"
+            >
+              <option value="next">Sort: Next run</option>
+              <option value="name">Sort: Name</option>
+              <option value="status">Sort: Status</option>
+              <option value="last">Sort: Last run</option>
+            </select>
+          </div>
+        )}
         {/* Create form */}
         {showCreate && (
           <CreateCronForm
@@ -2570,7 +2669,14 @@ export function CronView() {
           </div>
         )}
 
-        {jobs.map((job) => {
+        {/* No results from filter */}
+        {jobs.length > 0 && filteredJobs.length === 0 && searchFilter.trim() && (
+          <div className="flex flex-col items-center justify-center py-10">
+            <p className="text-xs text-muted-foreground/60">No jobs matching &ldquo;{searchFilter}&rdquo;</p>
+          </div>
+        )}
+
+        {filteredJobs.map((job) => {
           const isExpanded = expanded === job.id;
           const isEditing = editing === job.id;
           const isFocusedFromLink = targetJobId === job.id;

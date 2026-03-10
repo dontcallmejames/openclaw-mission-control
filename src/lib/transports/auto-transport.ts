@@ -93,8 +93,20 @@ export class AutoTransport implements OpenClawClient {
     return this.withFallback((c) => c.run(args, timeout, stdin));
   }
 
-  runCapture(args: string[], timeout?: number): Promise<RunCliResult> {
-    return this.withFallback((c) => c.runCapture(args, timeout));
+  async runCapture(args: string[], timeout?: number): Promise<RunCliResult> {
+    await this.probe();
+    if (this.preferHttp) {
+      const result = await this.http.runCapture(args, timeout);
+      if (result.code !== 0 && result.stderr?.includes("/tools/invoke")) {
+        // HTTP transport failed due to unavailable gateway tool — fall back to CLI
+        this.preferHttp = false;
+        this.inRecovery = true;
+        this.lastProbe = Date.now();
+        return this.cli.runCapture(args, timeout);
+      }
+      return result;
+    }
+    return this.cli.runCapture(args, timeout);
   }
 
   gatewayRpc<T>(

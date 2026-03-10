@@ -301,12 +301,6 @@ export async function PATCH(request: NextRequest) {
     // Read current config to get hash AND preserve existing perplexity keys
     const config = await gatewayCall<ConfigGet>("config.get", undefined, 10000);
     const hash = String(config?.hash || "");
-    if (!hash) {
-      return NextResponse.json(
-        { ok: false, error: "Could not read config hash" },
-        { status: 500 }
-      );
-    }
 
     // Read the existing perplexity block from disk to preserve apiKey etc.
     const mainConfig = await readJsonSafe<Record<string, unknown>>(join(OPENCLAW_DIR, "openclaw.json"), {});

@@ -27,32 +27,49 @@ export function sqliteValue(value: unknown): string {
   return sqlQuote(String(value));
 }
 
+// Every sqlite3 subprocess must set busy_timeout so concurrent connections
+// wait instead of failing immediately with SQLITE_BUSY.
+const PRAGMA_PREFIX = "PRAGMA busy_timeout=5000;\n";
+
 async function sqlite(args: string[], timeout = 20000): Promise<string> {
-  const { stdout } = await exec("sqlite3", args, { timeout });
-  return stdout;
+  try {
+    const { stdout } = await exec("sqlite3", args, { timeout });
+    return stdout;
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "ENOENT") {
+      throw new Error("sqlite3 binary not found — install SQLite to enable usage tracking");
+    }
+    throw err;
+  }
 }
 
 export async function usageDbExec(sql: string): Promise<void> {
   await ensureUsageDb();
-  await sqlite([DB_PATH, sql]);
+  await sqlite([DB_PATH, PRAGMA_PREFIX + sql]);
 }
 
 export async function usageDbQuery<T>(sql: string): Promise<T[]> {
   await ensureUsageDb();
-  const stdout = await sqlite(["-json", DB_PATH, sql]);
-  const parsed = JSON.parse(stdout || "[]") as T[];
-  return Array.isArray(parsed) ? parsed : [];
+  const stdout = await sqlite(["-json", DB_PATH, PRAGMA_PREFIX + sql]);
+  const trimmed = (stdout || "").trim();
+  if (!trimmed) return [];
+  try {
+    const parsed = JSON.parse(trimmed) as T[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 export async function usageDbTransaction(statements: string[]): Promise<void> {
   if (statements.length === 0) return;
   await ensureUsageDb();
-  const sql = ["BEGIN IMMEDIATE;", ...statements, "COMMIT;"].join("\n");
+  const sql = [PRAGMA_PREFIX + "BEGIN IMMEDIATE;", ...statements, "COMMIT;"].join("\n");
   try {
     await sqlite([DB_PATH, sql], 30000);
   } catch (err) {
     try {
-      await sqlite([DB_PATH, "ROLLBACK;"]);
+      await sqlite([DB_PATH, PRAGMA_PREFIX + "ROLLBACK;"]);
     } catch {
       // ignore rollback failures
     }

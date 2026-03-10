@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gatewayCall, runCliCaptureBoth } from "@/lib/openclaw";
+import { sanitizeConfigFile } from "@/lib/gateway-config";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { getOpenClawHome } from "@/lib/paths";
@@ -416,15 +417,8 @@ export async function PATCH(request: NextRequest) {
     const { raw, patch, baseHash } = body as {
       raw?: string;
       patch?: Record<string, unknown>;
-      baseHash: string;
+      baseHash?: string;
     };
-
-    if (!baseHash) {
-      return NextResponse.json(
-        { error: "baseHash required to prevent conflicts" },
-        { status: 400 }
-      );
-    }
 
     const validated = validateConfigPayload(raw, patch);
     if (!validated.ok) {
@@ -433,12 +427,20 @@ export async function PATCH(request: NextRequest) {
     const rawProvided = raw !== undefined;
     let workingPatchObj = validated.patchObj;
     let workingBaseHash = String(baseHash || "").trim();
+    if (!workingBaseHash) {
+      try {
+        const latest = await readConfigHashAndParsed();
+        workingBaseHash = latest.baseHash;
+      } catch {
+        // Legacy gateways may not provide hash; patch flow will fall back to config.set.
+      }
+    }
 
     const applyPatch = async (
       patchObj: Record<string, unknown>,
       hash: string
     ): Promise<Record<string, unknown>> => {
-      return gatewayCallWithRetry<Record<string, unknown>>(
+      const result = await gatewayCallWithRetry<Record<string, unknown>>(
         "config.patch",
         {
           raw: JSON.stringify(patchObj),
@@ -448,6 +450,9 @@ export async function PATCH(request: NextRequest) {
         20000,
         1
       );
+      // Strip leaked RPC keys the gateway may have persisted into the config.
+      await sanitizeConfigFile().catch(() => {});
+      return result;
     };
 
     const touchesGatewayAuthMode =

@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { Trash2, RefreshCw, MessageSquare, Clock, Zap, DollarSign } from "lucide-react";
+import { useState, useCallback, useRef, useEffect } from "react";
+import { Trash2, RefreshCw, MessageSquare, Clock, Zap, DollarSign, AlertCircle } from "lucide-react";
 import { estimateCostUsd } from "@/lib/model-metadata";
 import { cn } from "@/lib/utils";
 import { SectionBody, SectionHeader, SectionLayout } from "@/components/section-layout";
 import { LoadingState } from "@/components/ui/loading-state";
 import { useSmartPoll } from "@/hooks/use-smart-poll";
+import { notifyError } from "@/lib/notification-store";
 
 type Session = {
   key: string;
@@ -63,23 +64,39 @@ function sessionLabel(key: string): { type: string; badge: string } {
 export function SessionsView() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const hasLoadedOnce = useRef(false);
 
   const fetchSessions = useCallback(async () => {
     try {
-      const res = await fetch("/api/sessions", { cache: "no-store" });
+      const res = await fetch("/api/sessions", {
+        cache: "no-store",
+        signal: AbortSignal.timeout(10000),
+      });
       if (!res.ok) {
+        const msg = `Failed to load sessions (${res.status})`;
+        if (!hasLoadedOnce.current) setError(msg);
         setLoading(false);
+        setRefreshing(false);
         return;
       }
       const data = await res.json();
-      setSessions(data.sessions || []);
-    } catch { /* ignore */ }
+      const list = Array.isArray(data.sessions) ? data.sessions : [];
+      setSessions(list);
+      setError(null);
+      hasLoadedOnce.current = true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Network error";
+      if (!hasLoadedOnce.current) setError(msg);
+    }
     setLoading(false);
+    setRefreshing(false);
   }, []);
 
-  useSmartPoll(fetchSessions, { intervalMs: 5000 });
+  useSmartPoll(fetchSessions, { intervalMs: 10_000 });
 
   const killSession = useCallback(
     async (key: string) => {
@@ -87,18 +104,35 @@ export function SessionsView() {
       try {
         const res = await fetch(
           `/api/sessions?key=${encodeURIComponent(key)}`,
-          { method: "DELETE" }
+          { method: "DELETE", signal: AbortSignal.timeout(10000) },
         );
+        if (!res.ok) {
+          notifyError("Session kill failed", `Failed to kill session (${res.status})`, "sessions");
+          setDeleting(null);
+          return;
+        }
         const data = await res.json();
         if (data.ok || data.deleted) {
-          await fetchSessions();
+          setSessions((prev) => prev.filter((s) => s.key !== key));
+          setConfirmDelete(null);
+        } else {
+          notifyError("Session kill failed", "Gateway did not confirm deletion", "sessions");
         }
-      } catch { /* ignore */ }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : "Network error";
+        notifyError("Session kill failed", errMsg, "sessions");
+      }
       setDeleting(null);
-      setConfirmDelete(null);
     },
-    [fetchSessions]
+    [],
   );
+
+  // Clear stale confirmDelete if the session disappeared
+  useEffect(() => {
+    if (confirmDelete && !sessions.some((s) => s.key === confirmDelete)) {
+      setConfirmDelete(null);
+    }
+  }, [confirmDelete, sessions]);
 
   if (loading) {
     return (
@@ -117,17 +151,44 @@ export function SessionsView() {
           <button
             type="button"
             onClick={() => {
-              setLoading(true);
+              setRefreshing(true);
               fetchSessions();
             }}
-            className="flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-600 transition-colors hover:bg-stone-50 hover:text-stone-900 dark:border-[#2c343d] dark:bg-[#171a1d] dark:text-[#c7d0d9] dark:hover:bg-[#20252a] dark:hover:text-[#f5f7fa]"
+            disabled={refreshing}
+            className="flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-600 transition-colors hover:bg-stone-50 hover:text-stone-900 disabled:opacity-50 dark:border-[#2c343d] dark:bg-[#171a1d] dark:text-[#c7d0d9] dark:hover:bg-[#20252a] dark:hover:text-[#f5f7fa]"
           >
-            <RefreshCw className="h-3 w-3" /> Refresh
+            <RefreshCw className={cn("h-3 w-3", refreshing && "animate-spin")} /> Refresh
           </button>
         }
       />
 
       <SectionBody width="content" padding="compact" innerClassName="space-y-2">
+        {/* Error banner */}
+        {error && sessions.length === 0 && (
+          <div className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 dark:border-red-500/20 dark:bg-red-500/10">
+            <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-red-700 dark:text-red-400">
+                Failed to load sessions
+              </p>
+              <p className="mt-0.5 text-xs text-red-600 dark:text-red-300/70">
+                {error}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setLoading(true);
+                setError(null);
+                fetchSessions();
+              }}
+              className="shrink-0 rounded-lg bg-red-100 px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-200 dark:bg-red-500/20 dark:text-red-300 dark:hover:bg-red-500/30"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
         {sessions.map((s) => {
           const { type, badge } = sessionLabel(s.key);
           const isConfirming = confirmDelete === s.key;
@@ -211,7 +272,7 @@ export function SessionsView() {
             </div>
           );
         })}
-        {sessions.length === 0 && (
+        {sessions.length === 0 && !error && (
           <div className="flex items-center justify-center py-12 text-sm text-stone-500 dark:text-[#8d98a5]">
             No active sessions
           </div>

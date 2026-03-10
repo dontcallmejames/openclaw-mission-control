@@ -837,7 +837,7 @@ export function AccountsKeysView() {
                   Choose the model you want, connect providers, and decide what new chats should use.
                 </p>
                 <a
-                  href="/models"
+                  href="/agents?tab=models"
                   className="mt-3 inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
                   Open Models setup

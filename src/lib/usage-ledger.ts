@@ -159,7 +159,14 @@ function buildSeries(
   };
 
   const observed = filtered.map((row) => row.observedAtMs).filter((value) => value > 0);
-  const earliest = observed.length ? Math.min(...observed) : now - 24 * 60 * 60 * 1000;
+  // Use loop instead of Math.min(...spread) to avoid RangeError with >100K elements
+  let earliest = now - 24 * 60 * 60 * 1000;
+  if (observed.length > 0) {
+    earliest = observed[0];
+    for (let i = 1; i < observed.length; i++) {
+      if (observed[i] < earliest) earliest = observed[i];
+    }
+  }
   const spanMs = Math.max(now - earliest, 60 * 60 * 1000);
   const targetBins = 30;
   const rawBinMs = Math.ceil(spanMs / targetBins);

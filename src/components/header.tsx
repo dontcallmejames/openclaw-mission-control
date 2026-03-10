@@ -28,7 +28,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SearchModal } from "./search-modal";
-import { PairingNotifications } from "./pairing-notifications";
 import { NotificationCenter } from "./notification-center";
 import { ThemeToggle } from "./theme-toggle";
 import { chatStore, type ChatMessage } from "@/lib/chat-store";
@@ -130,7 +129,7 @@ export function AgentChatPanel() {
 
   // Fetch agents once
   useEffect(() => {
-    fetch("/api/agents")
+    fetch("/api/agents", { signal: AbortSignal.timeout(8000) })
       .then((r) => r.json())
       .then((data) => {
         const list = (data.agents || data || []) as AgentInfo[];
@@ -163,15 +162,21 @@ export function AgentChatPanel() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [chat.messages.length, chat.open]);
 
-  // Close on Escape
+  // Close on Escape — close agent picker first if open, then panel
   useEffect(() => {
     if (!chat.open) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") chatStore.close();
+      if (e.key === "Escape") {
+        if (showAgentPicker) {
+          setShowAgentPicker(false);
+        } else {
+          chatStore.close();
+        }
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [chat.open]);
+  }, [chat.open, showAgentPicker]);
 
   // Close on click outside
   useEffect(() => {
@@ -189,10 +194,26 @@ export function AgentChatPanel() {
     return () => { clearTimeout(timer); document.removeEventListener("mousedown", handler); };
   }, [chat.open]);
 
+  // Close agent picker on click outside it
+  useEffect(() => {
+    if (!showAgentPicker) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // The picker is inside the panel, so check if click is within the agent selector area
+      if (!target.closest("[data-agent-picker]")) {
+        setShowAgentPicker(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showAgentPicker]);
+
   const handleSend = useCallback(() => {
     if (!prompt.trim() || chat.sending) return;
     chatStore.send(prompt.trim());
     setPrompt("");
+    // Reset textarea height after clearing
+    if (inputRef.current) inputRef.current.style.height = "auto";
   }, [prompt, chat.sending]);
 
   const handleKeyDown = useCallback(
@@ -220,7 +241,7 @@ export function AgentChatPanel() {
         top: 56,
         zIndex: 99999,
       }}
-      className="flex max-h-screen w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-foreground/10 bg-card/95 shadow-2xl backdrop-blur-md animate-in slide-in-from-top-2 fade-in duration-200 sm:w-auto sm:max-w-md"
+      className="flex max-h-[min(70vh,600px)] w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-foreground/10 bg-card/95 shadow-2xl backdrop-blur-md animate-in slide-in-from-top-2 fade-in duration-200 sm:w-auto sm:max-w-md"
     >
       {/* Header */}
       <div className="flex shrink-0 items-center justify-between border-b border-foreground/10 px-4 py-2.5">
@@ -260,7 +281,7 @@ export function AgentChatPanel() {
       </div>
 
       {/* Agent selector */}
-      <div className="shrink-0 border-b border-foreground/10 px-4 py-2">
+      <div className="shrink-0 border-b border-foreground/10 px-4 py-2" data-agent-picker>
         <div className="relative">
           <button
             type="button"
@@ -674,7 +695,7 @@ export function Header() {
   return (
     <>
       <header className="flex shrink-0 items-center justify-between border-b border-stone-200 bg-stone-50 px-4 py-3 md:px-8 dark:border-[#23282e] dark:bg-[#121519]">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 ml-11 md:ml-0">
           <GatewayStatusBadge status={gwStatus} health={gwHealth} latencyMs={gwLatencyMs} />
         </div>
 
@@ -760,9 +781,6 @@ export function Header() {
               {isAlive ? "Emergency stop — kill the gateway" : "Start the gateway"}
             </div>
           </div>
-
-          {/* Pairing Notifications */}
-          <PairingNotifications />
 
           <NotificationCenter />
 

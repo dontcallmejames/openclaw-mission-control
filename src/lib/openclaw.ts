@@ -3,7 +3,7 @@
  *
  * Routes every call through the unified OpenClawClient which selects the
  * best transport automatically (HTTP to Gateway when available, CLI
- * subprocess as fallback). Works on Mac, Linux, and Docker.
+ * subprocess as fallback). Works on Mac and Linux.
  *
  * Internal modules (transports, openclaw-cli.ts) should NOT be imported
  * directly from API routes or lib helpers.

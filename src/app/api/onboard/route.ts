@@ -1,28 +1,24 @@
 /**
- * Onboarding API — checks setup status and performs quick-setup actions.
+ * Onboarding API
  *
  * GET  /api/onboard
- *   Returns: { installed, configured, configExists, hasModel, hasApiKey, gatewayRunning, version, gatewayUrl, home }
+ *   Returns setup status including hasModel, hasChannel, hasApiKey, etc.
  *
  * POST /api/onboard
- *   { action: "test-key",          provider, token }
- *   { action: "save-credentials",  provider, apiKey, model }
- *   { action: "list-models",       provider, token }
- *   { action: "quick-setup",       provider, apiKey, model }
- *   { action: "start-gateway" }
+ *   { action: "validate-key", provider, token }
+ *   { action: "list-models",  provider, token }
+ *   { action: "save-and-restart", openrouterKey, model, telegramToken }
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { access, readFile, writeFile, mkdir } from "fs/promises";
-import { join, dirname } from "path";
-import { gatewayCall, runCli } from "@/lib/openclaw";
+import { access, readFile } from "fs/promises";
+import { join } from "path";
+import { runCli, runCliCaptureBoth } from "@/lib/openclaw";
 import { getOpenClawBin, getOpenClawHome, getGatewayUrl } from "@/lib/paths";
 import {
-  buildProviderCredentialPatch,
-  fetchModelsFromProvider,
-  MINIMAX_PROVIDER_CONFIG,
   PROVIDER_ENV_KEYS,
   validateProviderToken,
+  fetchModelsFromProvider,
 } from "@/lib/provider-auth";
 
 export const dynamic = "force-dynamic";
@@ -47,29 +43,6 @@ async function readJsonSafe<T>(p: string): Promise<T | null> {
   }
 }
 
-async function writeJsonAtomic(p: string, data: unknown): Promise<void> {
-  await mkdir(dirname(p), { recursive: true });
-  await writeFile(p, JSON.stringify(data, null, 2) + "\n", "utf-8");
-}
-
-async function applyGatewayConfigPatch(rawPatch: Record<string, unknown>): Promise<void> {
-  const cfg = await gatewayCall<Record<string, unknown>>("config.get", undefined, 15000);
-  const baseHash = String(cfg.hash || "");
-  if (!baseHash) {
-    throw new Error("Missing config hash from gateway.");
-  }
-
-  await gatewayCall(
-    "config.patch",
-    {
-      raw: JSON.stringify(rawPatch),
-      baseHash,
-      restartDelayMs: 2000,
-    },
-    20000,
-  );
-}
-
 async function checkGatewayHealth(
   gatewayUrl: string,
 ): Promise<{ running: boolean; version?: string }> {
@@ -77,38 +50,17 @@ async function checkGatewayHealth(
     const res = await fetch(gatewayUrl, {
       signal: AbortSignal.timeout(4000),
     });
-    if (res.ok) {
-      const data = await res.json().catch(() => ({}));
-      return {
-        running: true,
-        version: typeof data.version === "string" ? data.version : undefined,
-      };
-    }
-    return { running: true };
+    if (!res.ok) return { running: false };
+    const data = await res.json().catch(() => ({}));
+    return {
+      running: true,
+      version: typeof data.version === "string" ? data.version : undefined,
+    };
   } catch {
     return { running: false };
   }
 }
 
-/**
- * Set a nested dot-path value in an object, creating intermediate objects as needed.
- */
-function setDotPath(obj: Record<string, unknown>, dotPath: string, value: unknown): void {
-  const parts = dotPath.split(".");
-  let cur: Record<string, unknown> = obj;
-  for (let i = 0; i < parts.length - 1; i++) {
-    const key = parts[i];
-    if (typeof cur[key] !== "object" || cur[key] === null) {
-      cur[key] = {};
-    }
-    cur = cur[key] as Record<string, unknown>;
-  }
-  cur[parts[parts.length - 1]] = value;
-}
-
-/**
- * Read a nested dot-path value from an object.
- */
 function getDotPath(obj: Record<string, unknown>, dotPath: string): unknown {
   const parts = dotPath.split(".");
   let cur: unknown = obj;
@@ -119,117 +71,6 @@ function getDotPath(obj: Record<string, unknown>, dotPath: string): unknown {
   return cur;
 }
 
-/* ── Direct file-write helpers (no CLI) ───────────── */
-
-async function ensureAuthProfile(
-  home: string,
-  provider: string,
-  apiKey: string,
-): Promise<void> {
-  const authPath = join(home, "agents", "main", "agent", "auth-profiles.json");
-  const existing = (await readJsonSafe<{ profiles: Record<string, unknown> }>(authPath)) || {
-    profiles: {},
-  };
-
-  const profileKey = `${provider}:default`;
-  const currentProfile = existing.profiles[profileKey] as
-    | { key?: string }
-    | undefined;
-
-  // No-op if already set to same key
-  if (currentProfile?.key === apiKey) return;
-
-  existing.profiles[profileKey] = {
-    provider,
-    type: "api_key",
-    key: apiKey,
-  };
-
-  await writeJsonAtomic(authPath, existing);
-}
-
-async function ensureConfigValue(
-  home: string,
-  dotPath: string,
-  value: unknown,
-): Promise<void> {
-  const configPath = join(home, "openclaw.json");
-  const existing = (await readJsonSafe<Record<string, unknown>>(configPath)) || {};
-
-  // No-op if value already set
-  if (getDotPath(existing, dotPath) === value) return;
-
-  setDotPath(existing, dotPath, value);
-  await writeJsonAtomic(configPath, existing);
-}
-
-/* ── Custom OpenAI-compatible endpoint helpers ─────── */
-
-/**
- * Normalize a base URL: trim, strip trailing slashes, auto-append /v1 if missing.
- */
-function normalizeBaseUrl(raw: string): string {
-  let url = raw.trim().replace(/\/+$/, "");
-  // If URL doesn't end with /v1 (or /v1/), append it
-  if (!/\/v1\/?$/i.test(url)) {
-    url = `${url}/v1`;
-  }
-  return url;
-}
-
-/**
- * Probe a custom OpenAI-compatible endpoint by hitting GET /v1/models.
- * Returns { ok, models?, error? }.
- */
-async function probeCustomEndpoint(
-  baseUrl: string,
-  token?: string,
-): Promise<{ ok: boolean; models?: { id: string; name: string }[]; error?: string }> {
-  const url = `${normalizeBaseUrl(baseUrl)}/models`;
-  const headers: Record<string, string> = {};
-  if (token) headers.Authorization = `Bearer ${token}`;
-
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      headers,
-      signal: AbortSignal.timeout(15000),
-    });
-
-    if (res.status === 401 || res.status === 403) {
-      return { ok: false, error: "Authentication required — provide an API key." };
-    }
-
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => "");
-      return {
-        ok: false,
-        error: `Endpoint returned ${res.status}${errBody ? `: ${errBody.slice(0, 200)}` : ""}`,
-      };
-    }
-
-    const data = await res.json();
-    const rawModels = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
-    const models = rawModels
-      .filter((m: unknown) => m && typeof m === "object" && "id" in (m as Record<string, unknown>))
-      .map((m: { id: string; name?: string; owned_by?: string }) => ({
-        id: m.id,
-        name: m.name || m.id,
-      }));
-
-    return { ok: true, models };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("fetch failed") || msg.includes("ECONNREFUSED")) {
-      return { ok: false, error: "Could not connect — check the URL and make sure the server is running." };
-    }
-    if (msg.includes("aborted") || msg.includes("timeout")) {
-      return { ok: false, error: "Connection timed out — the server did not respond within 15 seconds." };
-    }
-    return { ok: false, error: `Connection failed: ${msg}` };
-  }
-}
-
 /* ── GET /api/onboard ──────────────────────────────── */
 
 export async function GET() {
@@ -238,7 +79,6 @@ export async function GET() {
     const configPath = join(home, "openclaw.json");
     const authPath = join(home, "agents", "main", "agent", "auth-profiles.json");
 
-    // Check in parallel: binary, config, auth, gateway health
     const [binPath, configExists, authExists, gatewayUrl] = await Promise.all([
       getOpenClawBin().catch(() => null),
       fileExists(configPath),
@@ -248,7 +88,6 @@ export async function GET() {
 
     const installed = binPath !== null;
 
-    // Try to get the version
     let version: string | null = null;
     if (installed) {
       try {
@@ -259,27 +98,55 @@ export async function GET() {
       }
     }
 
-    // Check gateway
     const gateway = await checkGatewayHealth(gatewayUrl);
 
-    // Check model + api key
     let hasModel = false;
     let hasApiKey = false;
+    let hasLocalProvider = false;
+    let hasChannel = false;
 
     if (configExists) {
       try {
         const config = await readJsonSafe<Record<string, unknown>>(configPath);
         if (config) {
+          // Check model
           const model = getDotPath(config, "agents.defaults.model");
           hasModel = Boolean(
             typeof model === "string" ? model : (model as Record<string, unknown>)?.primary,
           );
 
+          // Check API keys in config.env
           const env = getDotPath(config, "env");
           if (env && typeof env === "object") {
             hasApiKey = Object.values(PROVIDER_ENV_KEYS).some((key) => {
               const value = (env as Record<string, unknown>)[key];
               return typeof value === "string" && value.trim().length > 0;
+            });
+          }
+
+          // Check auth.profiles
+          const authProfiles = getDotPath(config, "auth.profiles");
+          if (!hasApiKey && authProfiles && typeof authProfiles === "object") {
+            hasApiKey = Object.keys(authProfiles as Record<string, unknown>).length > 0;
+          }
+
+          // Check local/custom providers
+          const providers = getDotPath(config, "models.providers");
+          if (providers && typeof providers === "object") {
+            hasLocalProvider = Object.keys(providers as Record<string, unknown>).some((k) => {
+              const p = (providers as Record<string, unknown>)[k];
+              if (!p || typeof p !== "object") return false;
+              const baseUrl = (p as Record<string, unknown>).baseUrl;
+              return typeof baseUrl === "string" && baseUrl.trim().length > 0;
+            });
+          }
+
+          // Check channels — any key under channels with a non-empty object counts
+          const channels = getDotPath(config, "channels");
+          if (channels && typeof channels === "object") {
+            hasChannel = Object.keys(channels as Record<string, unknown>).some((k) => {
+              const ch = (channels as Record<string, unknown>)[k];
+              return ch && typeof ch === "object" && Object.keys(ch as Record<string, unknown>).length > 0;
             });
           }
         }
@@ -288,7 +155,8 @@ export async function GET() {
       }
     }
 
-    if (authExists) {
+    // Tier 3: per-agent auth-profiles.json
+    if (!hasApiKey && authExists) {
       try {
         const auth = await readJsonSafe<{ profiles?: Record<string, unknown> }>(authPath);
         hasApiKey = Boolean(auth?.profiles && Object.keys(auth.profiles).length > 0);
@@ -297,12 +165,35 @@ export async function GET() {
       }
     }
 
+    // Tier 4: process.env
+    if (!hasApiKey) {
+      hasApiKey = Object.values(PROVIDER_ENV_KEYS).some(
+        (key) => typeof process.env[key] === "string" && process.env[key]!.trim().length > 0,
+      );
+    }
+
+    // Detect Ollama
+    let hasOllama = false;
+    try {
+      const ollamaRes = await fetch("http://127.0.0.1:11434/api/tags", {
+        signal: AbortSignal.timeout(2000),
+      });
+      hasOllama = ollamaRes.ok;
+    } catch {
+      // not running
+    }
+
+    const hasCredentials = hasApiKey || hasLocalProvider || hasOllama;
+
     return NextResponse.json({
       installed,
-      configured: installed && configExists && hasModel && hasApiKey,
+      configured: hasCredentials && hasModel,
       configExists,
       hasModel,
       hasApiKey,
+      hasLocalProvider,
+      hasOllama,
+      hasChannel,
       gatewayRunning: gateway.running,
       version: version || gateway.version || null,
       gatewayUrl,
@@ -322,145 +213,33 @@ export async function POST(request: NextRequest) {
     const action = body.action as string;
 
     switch (action) {
-      /* ── test-key: lightweight probe ──────────────── */
-      case "test-key": {
+      /* ── validate-key ──────────────────────────────── */
+      case "validate-key": {
         const provider = String(body.provider || "").trim();
         const token = String(body.token || "").trim();
-
-        // Custom OpenAI-compatible endpoint (token is optional)
-        if (provider === "custom") {
-          const baseUrl = String(body.baseUrl || "").trim();
-          if (!baseUrl) {
-            return NextResponse.json(
-              { ok: false, error: "Base URL is required for custom endpoints" },
-              { status: 400 },
-            );
-          }
-          const result = await probeCustomEndpoint(baseUrl, token || undefined);
-          return NextResponse.json({
-            ok: result.ok,
-            error: result.error,
-            models: result.models,
-          });
-        }
-
-        // Standard providers require both provider and token
         if (!provider || !token) {
           return NextResponse.json(
             { ok: false, error: "Provider and token are required" },
             { status: 400 },
           );
         }
-
         const result = await validateProviderToken(provider, token);
         return NextResponse.json(result);
       }
 
-      /* ── save-credentials: write auth + model to disk ── */
-      case "save-credentials": {
-        const provider = String(body.provider || "").trim();
-        const apiKey = String(body.apiKey || "").trim();
-        const model = String(body.model || "").trim();
-        const baseUrl = String(body.baseUrl || "").trim();
-
-        if (!provider || (!apiKey && provider !== "custom")) {
-          return NextResponse.json(
-            { ok: false, error: "Provider and API key are required" },
-            { status: 400 },
-          );
-        }
-
-        const home = getOpenClawHome();
-
-        try {
-          const envKey = PROVIDER_ENV_KEYS[provider];
-          const gatewayPatch = buildProviderCredentialPatch(provider, apiKey);
-
-          if (provider === "custom" && baseUrl) {
-            gatewayPatch.models = {
-              providers: {
-                custom: {
-                  baseUrl: normalizeBaseUrl(baseUrl),
-                  api: "openai-completions",
-                  models: [],
-                },
-              },
-            };
-          }
-
-          if (model) {
-            gatewayPatch.agents = {
-              defaults: {
-                model: {
-                  primary: model,
-                },
-              },
-            };
-          }
-
-          if (Object.keys(gatewayPatch).length > 0) {
-            await applyGatewayConfigPatch(gatewayPatch);
-          }
-
-          // Custom/open-ended providers still need the local auth profile file for bearer tokens.
-          if ((provider === "custom" && apiKey) || !envKey) {
-            await ensureAuthProfile(home, provider, apiKey || "local-no-auth");
-          }
-          return NextResponse.json({ ok: true });
-        } catch (err) {
-          return NextResponse.json(
-            { ok: false, error: `Failed to save credentials: ${err}` },
-            { status: 500 },
-          );
-        }
-      }
-
-      /* ── list-models: fetch live model list ─────────── */
+      /* ── list-models ───────────────────────────────── */
       case "list-models": {
         const provider = String(body.provider || "").trim();
         const token = String(body.token || "").trim();
-        if (!provider) {
-          return NextResponse.json(
-            { ok: false, error: "Provider is required" },
-            { status: 400 },
-          );
-        }
-
-        // Custom provider: use probeCustomEndpoint which already returns models
-        if (provider === "custom") {
-          const baseUrl = String(body.baseUrl || "").trim();
-          if (!baseUrl) {
-            return NextResponse.json(
-              { ok: false, error: "Base URL is required for custom endpoints" },
-              { status: 400 },
-            );
-          }
-          const result = await probeCustomEndpoint(baseUrl, token || undefined);
-          if (result.ok && result.models) {
-            // Prefix model IDs with "custom/" for the model key format
-            const models = result.models.map((m) => ({
-              id: m.id.includes("/") ? m.id : `custom/${m.id}`,
-              name: m.name,
-            }));
-            return NextResponse.json({ ok: true, provider: "custom", models });
-          }
-          return NextResponse.json({
-            ok: false,
-            error: result.error || "Failed to fetch models",
-            models: [],
-          });
-        }
-
-        if (!token) {
+        if (!provider || !token) {
           return NextResponse.json(
             { ok: false, error: "Provider and token are required" },
             { status: 400 },
           );
         }
-
         try {
           const models = await fetchModelsFromProvider(provider, token);
-          return NextResponse.json({ ok: true, provider, models });
+          return NextResponse.json({ ok: true, models });
         } catch (err) {
           return NextResponse.json({
             ok: false,
@@ -470,162 +249,187 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      /* ── quick-setup: ensure auth + model + start gateway ── */
-      case "quick-setup": {
+      /* ── save-and-restart ──────────────────────────── */
+      case "save-and-restart": {
         const provider = String(body.provider || "").trim();
-        const apiKey = String(body.apiKey || "").trim();
+        const apiKeyValue = String(body.apiKey || "").trim();
         const model = String(body.model || "").trim();
-        const baseUrl = String(body.baseUrl || "").trim();
+        const telegramToken = String(body.telegramToken || "").trim();
+        const discordToken = String(body.discordToken || "").trim();
 
-        if (!provider || (!apiKey && provider !== "custom")) {
+        if (!provider || !apiKeyValue || !model) {
           return NextResponse.json(
-            { ok: false, error: "Provider and API key are required" },
+            { ok: false, error: "Provider, API key, and model are required" },
             { status: 400 },
           );
         }
 
-        const home = getOpenClawHome();
-        const steps: string[] = [];
+        // Map provider id to openclaw onboard --auth-choice and --*-api-key flag
+        const PROVIDER_ONBOARD_MAP: Record<string, { authChoice: string; keyFlag: string }> = {
+          openrouter: { authChoice: "openrouter-api-key", keyFlag: "--openrouter-api-key" },
+          openai: { authChoice: "openai-api-key", keyFlag: "--openai-api-key" },
+          anthropic: { authChoice: "apiKey", keyFlag: "--anthropic-api-key" },
+        };
 
-        // 1. Write auth profile (and custom provider config if needed)
+        const providerConfig = PROVIDER_ONBOARD_MAP[provider];
+        if (!providerConfig) {
+          return NextResponse.json(
+            { ok: false, error: `Unsupported provider: ${provider}` },
+            { status: 400 },
+          );
+        }
+
+        // Step 1: Run `openclaw onboard --non-interactive` to bootstrap
+        // config, workspace, gateway auth, daemon install & start.
+        const onboardArgs = [
+          "onboard",
+          "--non-interactive",
+          "--accept-risk",
+          "--mode", "local",
+          "--auth-choice", providerConfig.authChoice,
+          providerConfig.keyFlag, apiKeyValue,
+          "--secret-input-mode", "plaintext",
+          "--install-daemon",
+          "--daemon-runtime", "node",
+          "--skip-channels",
+          "--skip-skills",
+          "--skip-search",
+          "--skip-ui",
+        ];
+
         try {
-          if (provider === "custom" && baseUrl) {
-            const normalizedUrl = normalizeBaseUrl(baseUrl);
-            await ensureConfigValue(home, "models.providers.custom", {
-              baseUrl: normalizedUrl,
-              api: "openai-completions",
-              models: [],
-            });
-            if (apiKey) {
-              await ensureAuthProfile(home, "custom", apiKey);
-            } else {
-              await ensureAuthProfile(home, "custom", "local-no-auth");
-            }
-            steps.push(`Custom endpoint configured: ${normalizedUrl}`);
-          } else {
-            const envKey = PROVIDER_ENV_KEYS[provider];
-            if (envKey) {
-              await ensureConfigValue(home, `env.${envKey}`, apiKey);
-              await ensureConfigValue(home, `auth.profiles.${provider}:default`, {
-                provider,
-                mode: "api_key",
-              });
-            }
-            if (provider === "minimax") {
-              await ensureConfigValue(home, "models.providers.minimax", MINIMAX_PROVIDER_CONFIG);
-            }
-            if (!envKey) {
-              await ensureAuthProfile(home, provider, apiKey);
-            }
+          const onboardResult = await runCliCaptureBoth(onboardArgs, 60000);
+          if (onboardResult.code !== 0) {
+            const detail = String(onboardResult.stderr || onboardResult.stdout || "").trim();
+            return NextResponse.json(
+              { ok: false, error: `Onboard failed: ${detail || `exit code ${onboardResult.code}`}` },
+              { status: 500 },
+            );
           }
-          steps.push(`Authenticated ${provider}`);
         } catch (err) {
           return NextResponse.json(
-            { ok: false, error: `Failed to write auth profile: ${err}`, steps },
+            { ok: false, error: `Onboard failed: ${err instanceof Error ? err.message : err}` },
             { status: 500 },
           );
         }
 
-        // 2. Write default model
-        if (model) {
-          try {
-            await ensureConfigValue(home, "agents.defaults.model.primary", model);
-            steps.push(`Default model: ${model}`);
-          } catch (err) {
-            steps.push(`Warning: could not set default model: ${err}`);
-          }
-        }
-
-        // 3. Set gateway mode to local
+        // Step 2: Set the chosen model (onboard doesn't set this)
         try {
-          await ensureConfigValue(home, "gateway.mode", "local");
-        } catch {
-          // non-fatal
-        }
-
-        // 3b. Enable OpenResponses HTTP endpoint for streaming chat
-        try {
-          await ensureConfigValue(
-            home,
-            "gateway.http.endpoints.responses.enabled",
-            true,
+          const modelResult = await runCliCaptureBoth(
+            ["config", "set", "agents.defaults.model.primary", model],
+            10000,
           );
-        } catch {
-          // non-fatal — chat falls back to CLI if this isn't enabled
-        }
-
-        // 4. Start gateway if not running
-        const gatewayUrl = await getGatewayUrl();
-        const gwHealth = await checkGatewayHealth(gatewayUrl);
-        if (!gwHealth.running) {
-          try {
-            await runCli(["gateway", "start"], 25000);
-            steps.push("Gateway started");
-
-            // Health check retries: 5 × 1s
-            let running = false;
-            for (let i = 0; i < 5; i++) {
-              await new Promise((r) => setTimeout(r, 1000));
-              const check = await checkGatewayHealth(gatewayUrl);
-              if (check.running) {
-                running = true;
-                break;
-              }
-            }
-            if (!running) {
-              steps.push("Warning: gateway started but health check not responding yet");
-            } else {
-              steps.push("Gateway running");
-            }
-          } catch (err) {
-            steps.push(`Warning: could not start gateway: ${err}`);
+          if (modelResult.code !== 0) {
+            const detail = String(modelResult.stderr || modelResult.stdout || "").trim();
+            return NextResponse.json(
+              { ok: false, error: `Model config failed: ${detail || `exit code ${modelResult.code}`}` },
+              { status: 500 },
+            );
           }
-        } else {
-          steps.push("Gateway running");
+        } catch (err) {
+          return NextResponse.json(
+            { ok: false, error: `Model config failed: ${err instanceof Error ? err.message : err}` },
+            { status: 500 },
+          );
         }
 
-        return NextResponse.json({
-          ok: true,
-          steps,
-          gatewayUrl,
-        });
+        // Step 3: Configure channels + restart gateway
+        const channelCmds: string[][] = [];
+
+        if (telegramToken) {
+          channelCmds.push(
+            ["config", "set", "channels.telegram.enabled", "true"],
+            ["config", "set", "channels.telegram.botToken", telegramToken],
+            ["config", "set", "channels.telegram.dmPolicy", "pairing"],
+            ["config", "set", "channels.telegram.groupPolicy", "disabled"],
+          );
+        }
+
+        if (discordToken) {
+          channelCmds.push(
+            ["config", "set", "channels.discord.enabled", "true"],
+            ["config", "set", "channels.discord.token", discordToken],
+            ["config", "set", "channels.discord.dmPolicy", "pairing"],
+            ["config", "set", "channels.discord.groupPolicy", "disabled"],
+          );
+        }
+
+        if (channelCmds.length > 0) {
+          for (const cmd of channelCmds) {
+            try {
+              const result = await runCliCaptureBoth(cmd, 10000);
+              if (result.code !== 0) {
+                const detail = String(result.stderr || result.stdout || "").trim();
+                return NextResponse.json(
+                  { ok: false, error: `Channel config failed (${cmd[2]}): ${detail || `exit code ${result.code}`}` },
+                  { status: 500 },
+                );
+              }
+            } catch (err) {
+              return NextResponse.json(
+                { ok: false, error: `Channel config failed: ${err instanceof Error ? err.message : err}` },
+                { status: 500 },
+              );
+            }
+          }
+
+          // Restart gateway to pick up channel config
+          try {
+            await runCli(["gateway", "restart"], 25000);
+          } catch {
+            // restart may fail transiently — gateway may self-recover
+          }
+        }
+
+        // Step 4: Wait for gateway to be healthy
+        const gatewayUrl = await getGatewayUrl();
+        for (let i = 0; i < 10; i++) {
+          await new Promise((r) => setTimeout(r, 1500));
+          const health = await checkGatewayHealth(gatewayUrl);
+          if (health.running) break;
+        }
+
+        return NextResponse.json({ ok: true });
       }
 
-      /* ── start-gateway ──────────────────────────────── */
-      case "start-gateway": {
-        const gatewayUrl = await getGatewayUrl();
-        const gwHealth = await checkGatewayHealth(gatewayUrl);
-        if (gwHealth.running) {
-          return NextResponse.json({
-            ok: true,
-            message: "Gateway already running",
-            version: gwHealth.version,
-          });
+      /* ── get-bot-info ─────────────────────────────── */
+      case "get-bot-info": {
+        const botToken = String(body.token || "").trim();
+        const channel = String(body.channel || "").trim();
+        if (!botToken || !channel) {
+          return NextResponse.json({ ok: false });
         }
-
         try {
-          await runCli(["gateway", "start"], 25000);
-          let retries = 5;
-          let version: string | undefined;
-          while (retries-- > 0) {
-            await new Promise((r) => setTimeout(r, 1000));
-            const check = await checkGatewayHealth(gatewayUrl);
-            if (check.running) {
-              version = check.version;
-              break;
+          if (channel === "telegram") {
+            const res = await fetch(`https://api.telegram.org/bot${botToken}/getMe`, {
+              signal: AbortSignal.timeout(5000),
+            });
+            if (res.ok) {
+              const data = await res.json();
+              const bot = data.result;
+              return NextResponse.json({
+                ok: true,
+                username: bot?.username ? `@${bot.username}` : null,
+                name: bot?.first_name || null,
+              });
             }
           }
-          return NextResponse.json({
-            ok: true,
-            message: "Gateway started",
-            version,
-          });
-        } catch (err) {
-          return NextResponse.json(
-            { ok: false, error: `Failed to start gateway: ${err}` },
-            { status: 500 },
-          );
-        }
+          if (channel === "discord") {
+            const res = await fetch("https://discord.com/api/v10/users/@me", {
+              headers: { Authorization: `Bot ${botToken}` },
+              signal: AbortSignal.timeout(5000),
+            });
+            if (res.ok) {
+              const bot = await res.json();
+              return NextResponse.json({
+                ok: true,
+                username: bot?.username || null,
+                name: bot?.global_name || bot?.username || null,
+              });
+            }
+          }
+        } catch { /* silent */ }
+        return NextResponse.json({ ok: false });
       }
 
       default:

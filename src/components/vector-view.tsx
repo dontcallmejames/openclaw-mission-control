@@ -5,7 +5,7 @@ import {
   Database, Search, RefreshCw, ChevronDown, ChevronUp, Check,
   AlertTriangle, X, FileText, Hash, Cpu, HardDrive,
   Layers, RotateCcw, Activity, Filter, ArrowUpDown, Eye, Copy,
-  Box, BarChart3, CircleDot, Settings2, Pencil, Save, Lock, KeyRound,
+  Box, BarChart3, CircleDot, Pencil, Save, Lock, KeyRound,
   Zap, Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -33,18 +33,6 @@ type AgentMemory = {
 
 type SearchResult = { path: string; startLine: number; endLine: number; score: number; snippet: string; source: string };
 type Toast = { message: string; type: "success" | "error" };
-
-/** Per OpenClaw docs: API-key providers use the onboarding wizard; models auth login requires provider plugins. */
-function authCommandForProvider(provider: string): string {
-  switch (provider) {
-    case "openai":
-      return "openclaw onboard --auth-choice openai-api-key";
-    case "google":
-      return "openclaw onboard --auth-choice gemini-api-key";
-    default:
-      return "openclaw onboard";
-  }
-}
 
 const EMBEDDING_MODELS: { provider: string; model: string; dims: number; label: string }[] = [
   { provider: "openai", model: "text-embedding-3-small", dims: 1536, label: "OpenAI text-embedding-3-small" },
@@ -91,6 +79,8 @@ function ScoreBar({ score }: { score: number }) {
 function ResultCard({ result, rank }: { result: SearchResult; rank: number }) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (copyTimerRef.current) clearTimeout(copyTimerRef.current); }, []);
   return (
     <div className="rounded-xl border border-stone-200 bg-white shadow-sm transition-colors hover:border-stone-300 dark:border-[#2c343d] dark:bg-[#171a1d]">
       <div className="flex flex-wrap items-center gap-3 px-4 py-3">
@@ -105,7 +95,7 @@ function ResultCard({ result, rank }: { result: SearchResult; rank: number }) {
         </div>
         <ScoreBar score={result.score} />
         <div className="flex items-center gap-1">
-          <button onClick={() => { navigator.clipboard.writeText(result.snippet); setCopied(true); setTimeout(() => setCopied(false), 1500); }} className="rounded-lg p-1.5 text-muted-foreground/60 transition-colors hover:bg-stone-100 hover:text-stone-900 dark:hover:bg-[#20252a] dark:hover:text-[#f5f7fa]" title="Copy">
+          <button onClick={() => { navigator.clipboard.writeText(result.snippet); setCopied(true); if (copyTimerRef.current) clearTimeout(copyTimerRef.current); copyTimerRef.current = setTimeout(() => setCopied(false), 1500); }} className="rounded-lg p-1.5 text-muted-foreground/60 transition-colors hover:bg-stone-100 hover:text-stone-900 dark:hover:bg-[#20252a] dark:hover:text-[#f5f7fa]" title="Copy" aria-label="Copy snippet">
             {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
           </button>
           <button onClick={() => setExpanded(!expanded)} className="rounded-lg p-1.5 text-muted-foreground/60 transition-colors hover:bg-stone-100 hover:text-stone-900 dark:hover:bg-[#20252a] dark:hover:text-[#f5f7fa]">
@@ -265,7 +255,8 @@ function EmbeddingModelEditor({
     queueMicrotask(() => setAuthLoading(true));
     (async () => {
       try {
-        const res = await fetch("/api/models");
+        const res = await fetch("/api/models", { signal: AbortSignal.timeout(10000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const providers = new Set<string>();
         // Extract providers that have auth configured
@@ -293,11 +284,6 @@ function EmbeddingModelEditor({
     () => EMBEDDING_MODELS.filter((m) => m.provider !== "local" && !authProviders.has(m.provider)),
     [authProviders]
   );
-  const lockedProviders = useMemo(
-    () => [...new Set(lockedModels.map((m) => m.provider))],
-    [lockedModels]
-  );
-
   if (!editing) return (
     <div className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm dark:border-[#2c343d] dark:bg-[#171a1d]">
       <div className="flex items-center justify-between">
@@ -411,19 +397,7 @@ function EmbeddingModelEditor({
                   </div>
                 ))}
               </div>
-              <div className="mt-2 rounded-lg border border-foreground/10 bg-muted/30 px-3 py-2.5">
-                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <KeyRound className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-300" />
-                  Authenticate providers via the onboarding wizard (API keys; no plugins required):
-                </p>
-                <ul className="mt-1.5 pl-5 space-y-1 text-xs font-mono text-muted-foreground/70 list-disc">
-                  {lockedProviders.map((p) => (
-                    <li key={p}>
-                      <code className="rounded bg-muted px-1 py-0.5 text-emerald-700 dark:text-emerald-300">{authCommandForProvider(p)}</code>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+
             </div>
           )}
         </>
@@ -733,7 +707,7 @@ export function VectorView() {
   const [apiWarning, setApiWarning] = useState<string | null>(null);
   const [apiDegraded, setApiDegraded] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [reindexing, setReindexing] = useState(false);
+  const [reindexingAgents, setReindexingAgents] = useState<Set<string>>(new Set());
   const [deletingNamespace, setDeletingNamespace] = useState<string | null>(null);
   const [ensuringExtraPaths, setEnsuringExtraPaths] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -748,13 +722,16 @@ export function VectorView() {
   const [searching, setSearching] = useState(false);
   const [lastQuery, setLastQuery] = useState("");
   const [searchTime, setSearchTime] = useState(0);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchAbortRef = useRef<AbortController | null>(null);
   const [authProviders, setAuthProviders] = useState<string[]>([]);
   const [memorySearch, setMemorySearch] = useState<Record<string, unknown> | null>(null);
 
   const fetchStatus = useCallback(async () => {
     try {
       const res = await fetch("/api/vector?scope=status");
+      if (!res.ok) throw new Error(`Status fetch failed (${res.status})`);
       const data = await res.json();
       setApiWarning(
         typeof data.warning === "string" && data.warning.trim()
@@ -777,15 +754,27 @@ export function VectorView() {
   useEffect(() => { fetchStatus(); }, [fetchStatus]);
 
   const doSearch = useCallback(async (q: string) => {
-    if (!q || q.trim().length < 2) { setResults([]); setLastQuery(""); return; }
-    setSearching(true); const start = performance.now();
+    if (!q || q.trim().length < 2) { setResults([]); setLastQuery(""); setSearchError(null); return; }
+    // Cancel any in-flight search
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+    setSearching(true); setSearchError(null);
+    const start = performance.now();
     try {
       const p = new URLSearchParams({ scope: "search", q: q.trim(), max: maxResults });
       if (searchAgent) p.set("agent", searchAgent);
       if (minScore) p.set("minScore", minScore);
-      const res = await fetch("/api/vector?" + p); const data = await res.json();
+      const res = await fetch("/api/vector?" + p, { signal: controller.signal });
+      if (!res.ok) throw new Error(`Search failed (${res.status})`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
       setResults(data.results || []); setLastQuery(q); setSearchTime(Math.round(performance.now() - start));
-    } catch { setResults([]); } finally { setSearching(false); }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      setResults([]);
+      setSearchError(err instanceof Error ? err.message : "Search failed");
+    } finally { setSearching(false); }
   }, [searchAgent, maxResults, minScore]);
 
   useEffect(() => {
@@ -795,13 +784,16 @@ export function VectorView() {
   }, [query, doSearch]);
 
   const handleReindex = useCallback(async (agentId: string, force: boolean) => {
-    setReindexing(true);
+    setReindexingAgents((prev) => new Set(prev).add(agentId));
     try {
       const res = await fetch("/api/vector", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "reindex", agent: agentId, force }) });
+      if (!res.ok) throw new Error(`Reindex failed (${res.status})`);
       const d = await res.json();
       if (d.ok) { setToast({ message: agentId + (force ? " force" : "") + " reindexed", type: "success" }); await fetchStatus(); }
-      else setToast({ message: d.error || "Reindex failed", type: "error" });
-    } catch (e) { setToast({ message: String(e), type: "error" }); } finally { setReindexing(false); }
+      else setToast({ message: typeof d.error === "string" ? d.error : "Reindex failed", type: "error" });
+    } catch (e) { setToast({ message: e instanceof Error ? e.message : "Reindex failed", type: "error" }); } finally {
+      setReindexingAgents((prev) => { const next = new Set(prev); next.delete(agentId); return next; });
+    }
   }, [fetchStatus]);
 
   const handleDeleteNamespace = useCallback(async (agentId: string) => {
@@ -817,15 +809,16 @@ export function VectorView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "delete-namespace", agent: agentId }),
       });
+      if (!res.ok) throw new Error(`Delete failed (${res.status})`);
       const d = await res.json();
       if (d.ok) {
         setToast({ message: `${agentId} namespace deleted`, type: "success" });
         await fetchStatus();
       } else {
-        setToast({ message: d.error || "Namespace delete failed", type: "error" });
+        setToast({ message: typeof d.error === "string" ? d.error : "Namespace delete failed", type: "error" });
       }
     } catch (e) {
-      setToast({ message: String(e), type: "error" });
+      setToast({ message: e instanceof Error ? e.message : "Delete failed", type: "error" });
     } finally {
       setDeletingNamespace(null);
     }
@@ -835,13 +828,14 @@ export function VectorView() {
     setEnsuringExtraPaths(true);
     try {
       const res = await fetch("/api/vector", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "ensure-extra-paths" }) });
+      if (!res.ok) throw new Error(`Failed (${res.status})`);
       const d = await res.json();
       if (d.ok) {
-        const paths = (d.extraPaths as string[]) || [];
-        setToast({ message: paths.length > 0 ? `Added ${paths.length} reference file(s) to index and reindexed` : d.message || "Done", type: "success" });
+        const paths = Array.isArray(d.extraPaths) ? d.extraPaths : [];
+        setToast({ message: paths.length > 0 ? `Added ${paths.length} reference file(s) to index and reindexed` : (typeof d.message === "string" ? d.message : "Done"), type: "success" });
         await fetchStatus();
-      } else setToast({ message: d.error || "Failed", type: "error" });
-    } catch (e) { setToast({ message: String(e), type: "error" }); } finally { setEnsuringExtraPaths(false); }
+      } else setToast({ message: typeof d.error === "string" ? d.error : "Failed", type: "error" });
+    } catch (e) { setToast({ message: e instanceof Error ? e.message : "Failed", type: "error" }); } finally { setEnsuringExtraPaths(false); }
   }, [fetchStatus]);
 
   const handleUpdateModel = useCallback(async (prov: string, mod: string, options?: EmbeddingOptions) => {
@@ -852,10 +846,11 @@ export function VectorView() {
       if (options?.fallback !== undefined) body.fallback = options.fallback;
       if (options?.cacheEnabled !== undefined) body.cacheEnabled = options.cacheEnabled;
       const res = await fetch("/api/vector", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error(`Update failed (${res.status})`);
       const d = await res.json();
       if (d.ok) { setToast({ message: "Model changed to " + prov + "/" + mod + ". Run reindex.", type: "success" }); await fetchStatus(); }
-      else setToast({ message: d.error || "Failed", type: "error" });
-    } catch (e) { setToast({ message: String(e), type: "error" }); } finally { setSaving(false); }
+      else setToast({ message: typeof d.error === "string" ? d.error : "Failed", type: "error" });
+    } catch (e) { setToast({ message: e instanceof Error ? e.message : "Update failed", type: "error" }); } finally { setSaving(false); }
   }, [fetchStatus]);
 
   const handleSetup = useCallback(async (provider: string, model: string, options?: { localModelPath?: string }) => {
@@ -868,16 +863,17 @@ export function VectorView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      if (!res.ok) throw new Error(`Setup failed (${res.status})`);
       const d = await res.json();
       if (d.ok) {
         setToast({ message: "Vector memory enabled with " + provider + "/" + model + "!", type: "success" });
         setLoading(true);
         await fetchStatus();
       } else {
-        setToast({ message: d.error || "Setup failed", type: "error" });
+        setToast({ message: typeof d.error === "string" ? d.error : "Setup failed", type: "error" });
       }
     } catch (e) {
-      setToast({ message: String(e), type: "error" });
+      setToast({ message: e instanceof Error ? e.message : "Setup failed", type: "error" });
     } finally {
       setSettingUp(false);
     }
@@ -966,7 +962,7 @@ export function VectorView() {
           ) : authProviders.includes("openai") ? (
             <span>Current provider is <span className="font-mono">{curProv || "—"}/{curModel || "—"}</span>. OpenAI is available — click Change below to use it for embeddings.</span>
           ) : curProv ? (
-            <span>Current: <span className="font-mono">{curProv}/{curModel}</span>. To add OpenAI for embeddings, run <code className="rounded bg-muted px-1 py-0.5 text-emerald-700 dark:text-emerald-300">openclaw onboard --auth-choice openai-api-key</code> then refresh.</span>
+            <span>Current: <span className="font-mono">{curProv}/{curModel}</span></span>
           ) : (
             <span>No embedding provider set. Use &quot;Or configure manually&quot; below with provider <span className="font-mono">openai</span> and model <span className="font-mono">text-embedding-3-small</span> after running <code className="rounded bg-muted px-1 py-0.5 text-emerald-700 dark:text-emerald-300">openclaw onboard --auth-choice openai-api-key</code>.</span>
           )}
@@ -988,9 +984,9 @@ export function VectorView() {
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-1.5"><Filter className="h-3 w-3 text-muted-foreground/60" /><span className="text-xs font-medium uppercase tracking-wider text-muted-foreground/60">Filters</span></div>
             <select value={searchAgent} onChange={(e) => setSearchAgent(e.target.value)} aria-label="Filter by namespace" className="rounded-md border border-foreground/10 bg-muted px-2.5 py-1.5 text-xs text-foreground/70 outline-none"><option value="">All namespaces</option>{agents.map((a) => <option key={a.agentId} value={a.agentId}>{a.agentId}</option>)}</select>
-            <div className="flex items-center gap-1.5"><span className="text-xs text-muted-foreground/60">Top-K:</span><select value={maxResults} onChange={(e) => setMaxResults(e.target.value)} aria-label="Top-K results" className="rounded-md border border-foreground/10 bg-muted px-2 py-1.5 text-xs text-foreground/70 outline-none">{["3","5","10","20","50"].map((v) => <option key={v} value={v}>{v}</option>)}</select></div>
+            <div className="flex items-center gap-1.5"><span className="text-xs text-muted-foreground/60">Top-K:</span><select value={maxResults} onChange={(e) => setMaxResults(e.target.value)} aria-label="Top-K results" className="rounded-md border border-foreground/10 bg-muted px-2 py-1.5 text-xs text-foreground/70 outline-none">{["3", "5", "10", "20", "50"].map((v) => <option key={v} value={v}>{v}</option>)}</select></div>
             <div className="flex items-center gap-1.5"><span className="text-xs text-muted-foreground/60">Min score:</span><input type="number" step="0.05" min="0" max="1" value={minScore} onChange={(e) => setMinScore(e.target.value)} placeholder="0.0" aria-label="Minimum score threshold" className="w-16 rounded-md border border-foreground/10 bg-muted px-2 py-1.5 text-xs text-foreground/70 outline-none" /></div>
-            <div className="flex items-center gap-1.5"><ArrowUpDown className="h-3 w-3 text-muted-foreground/60" /><select value={sortBy} onChange={(e) => setSortBy(e.target.value as "score"|"path")} aria-label="Sort results by" className="rounded-md border border-foreground/10 bg-muted px-2 py-1.5 text-xs text-foreground/70 outline-none"><option value="score">By score</option><option value="path">By path</option></select></div>
+            <div className="flex items-center gap-1.5"><ArrowUpDown className="h-3 w-3 text-muted-foreground/60" /><select value={sortBy} onChange={(e) => setSortBy(e.target.value as "score" | "path")} aria-label="Sort results by" className="rounded-md border border-foreground/10 bg-muted px-2 py-1.5 text-xs text-foreground/70 outline-none"><option value="score">By score</option><option value="path">By path</option></select></div>
           </div>
           {lastQuery && <div className="flex items-center gap-3 text-xs text-muted-foreground"><span>{results.length} result{results.length !== 1 ? "s" : ""} for <span className="font-medium text-emerald-700 dark:text-emerald-300">{"\u201C"}{lastQuery}{"\u201D"}</span></span><span className="text-muted-foreground/40">&middot;</span><span>{searchTime}ms</span>{results.length > 0 && <><span className="text-muted-foreground/40">&middot;</span><span>top: <span className={cn("font-mono", scoreColor(results[0].score))}>{results[0].score.toFixed(4)}</span></span></>}</div>}
         </div>
@@ -1002,7 +998,15 @@ export function VectorView() {
           </div>
         )}
 
-        {lastQuery && results.length === 0 && !searching && (
+        {searchError && !searching && (
+          <div className="rounded-xl border border-dashed border-red-500/20 bg-red-500/5 p-8 text-center">
+            <AlertTriangle className="mx-auto h-8 w-8 text-red-400/60 mb-3" />
+            <p className="text-sm text-red-400">{searchError}</p>
+            <p className="text-xs text-muted-foreground/60 mt-1">Check that the gateway is running and memory is indexed.</p>
+          </div>
+        )}
+
+        {lastQuery && results.length === 0 && !searching && !searchError && (
           <div className="rounded-xl border border-dashed border-foreground/10 bg-muted/50 p-8 text-center">
             <Search className="mx-auto h-8 w-8 text-muted-foreground/40 mb-3" />
             <p className="text-sm text-muted-foreground">No results for <span className="text-emerald-700 dark:text-emerald-300">{"\u201C"}{lastQuery}{"\u201D"}</span></p>
@@ -1010,13 +1014,13 @@ export function VectorView() {
           </div>
         )}
 
-        <div><h2 className="mb-3 flex items-center gap-2 text-xs font-semibold text-foreground/90"><Database className="h-4 w-4 text-stone-700 dark:text-[#d6dce3]" />Namespaces<span className="rounded bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">{agents.length}</span></h2><div className="space-y-2">{agents.map((a) => <AgentIndexCard key={a.agentId} agent={a} onReindex={handleReindex} onDelete={handleDeleteNamespace} reindexing={reindexing} deleting={deletingNamespace === a.agentId} />)}</div></div>
+        <div><h2 className="mb-3 flex items-center gap-2 text-xs font-semibold text-foreground/90"><Database className="h-4 w-4 text-stone-700 dark:text-[#d6dce3]" />Namespaces<span className="rounded bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">{agents.length}</span></h2><div className="space-y-2">{agents.map((a) => <AgentIndexCard key={a.agentId} agent={a} onReindex={handleReindex} onDelete={handleDeleteNamespace} reindexing={reindexingAgents.has(a.agentId)} deleting={deletingNamespace === a.agentId} />)}</div></div>
 
         <div className="rounded-xl border border-foreground/10 bg-foreground/5 p-4 space-y-3">
           <div className="flex items-center justify-between gap-2">
             <div>
               <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90"><FileText className="h-4 w-4 text-stone-700 dark:text-[#d6dce3]" />Workspace reference files</div>
-              <p className="text-xs text-muted-foreground mt-0.5">Include all root-level <code className="rounded bg-muted px-1 text-xs">.md</code> files in semantic search so the index covers your full workspace knowledge, not just <code className="rounded bg-muted px-1 text-xs">memory/</code>.</p>
+
             </div>
             <button type="button" onClick={handleEnsureExtraPaths} disabled={ensuringExtraPaths} className="shrink-0 flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-3 py-2 text-xs font-medium hover:bg-primary/90 disabled:opacity-50">
               {ensuringExtraPaths ? <span className="inline-flex items-center gap-0.5"><span className="h-1 w-1 animate-bounce rounded-full bg-current [animation-delay:0ms]" /><span className="h-1 w-1 animate-bounce rounded-full bg-current [animation-delay:150ms]" /><span className="h-1 w-1 animate-bounce rounded-full bg-current [animation-delay:300ms]" /></span> : <FileText className="h-3.5 w-3.5" />}
@@ -1025,21 +1029,9 @@ export function VectorView() {
           </div>
         </div>
 
-        <div className="rounded-xl border border-foreground/10 bg-foreground/5 p-4 space-y-2">
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90"><Settings2 className="h-4 w-4 text-muted-foreground" />How It Works</div>
-          <div className="text-xs text-muted-foreground space-y-1">
-            <p>OpenClaw indexes workspace <code className="rounded bg-foreground/10 px-1 text-xs text-muted-foreground">memory/</code> files into SQLite with vector embeddings (sqlite-vec). Use &quot;Include reference files in search&quot; above to also index root-level <code className="rounded bg-foreground/10 px-1 text-xs text-muted-foreground">.md</code> files.</p>
-            <p>Each file is chunked and embedded using the configured model (default: text-embedding-3-small, 1536d). Search uses cosine similarity. FTS5 is available as fallback.</p>
-          </div>
-          <div className="rounded-lg bg-muted p-3 font-mono text-xs text-muted-foreground space-y-0.5">
-            <p><span className="text-emerald-700 dark:text-emerald-300">openclaw memory status</span> <span className="text-muted-foreground/60"># Index status</span></p>
-            <p><span className="text-emerald-700 dark:text-emerald-300">openclaw memory index</span> <span className="text-muted-foreground/60"># Incremental reindex</span></p>
-            <p><span className="text-emerald-700 dark:text-emerald-300">openclaw memory index --force</span> <span className="text-muted-foreground/60"># Full reindex</span></p>
-            <p><span className="text-emerald-700 dark:text-emerald-300">openclaw memory search &quot;query&quot;</span> <span className="text-muted-foreground/60"># Semantic search</span></p>
-          </div>
-        </div>
+
       </SectionBody>
       {toast && <ToastBar toast={toast} onDone={() => setToast(null)} />}
-    </SectionLayout>
+    </SectionLayout >
   );
 }

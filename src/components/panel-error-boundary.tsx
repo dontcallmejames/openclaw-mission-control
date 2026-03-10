@@ -2,6 +2,7 @@
 
 import { Component, type ReactNode } from "react";
 import { AlertTriangle, RotateCcw } from "lucide-react";
+import { notifyError } from "@/lib/notification-store";
 
 type Props = {
   children: ReactNode;
@@ -26,6 +27,11 @@ export class PanelErrorBoundary extends Component<Props, State> {
       `[PanelErrorBoundary] ${this.props.section ?? "unknown"} crashed:`,
       error,
       info.componentStack,
+    );
+    notifyError(
+      `${this.props.section ?? "A section"} crashed`,
+      error.message,
+      this.props.section,
     );
   }
 

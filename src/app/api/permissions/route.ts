@@ -475,9 +475,6 @@ export async function POST(request: NextRequest) {
       const enabled = Boolean(body.enabled);
       const cfg = await gatewayCall<{ hash?: string }>("config.get", undefined, 12000);
       const baseHash = String(cfg.hash || "");
-      if (!baseHash) {
-        throw new Error("Missing config hash from gateway.");
-      }
       await gatewayCall(
         "config.patch",
         {

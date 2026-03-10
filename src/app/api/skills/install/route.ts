@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
       );
 
       const child = spawn(cmd, args, {
-        env: { ...process.env, NO_COLOR: "0", HOMEBREW_COLOR: "1" },
+        env: { ...process.env, NO_COLOR: "0", HOMEBREW_COLOR: "1", OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1" },
         timeout: 240000,
         stdio: ["pipe", "pipe", "pipe"],
       });

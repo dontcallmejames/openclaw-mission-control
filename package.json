@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/dashboard",
-  "version": "0.3.3",
+  "version": "0.4.3",
   "description": "Mission Control — open-source OpenClaw GUI and AI agent dashboard for managing local AI agents, models, memory, and skills",
   "keywords": [
     "openclaw",
@@ -41,6 +41,7 @@
   },
   "dependencies": {
     "@ai-sdk/react": "^3.0.88",
+    "@base-ui/react": "^1.2.0",
     "@monaco-editor/react": "^4.7.0",
     "@types/turndown": "^5.0.6",
     "@types/ws": "^8.18.1",

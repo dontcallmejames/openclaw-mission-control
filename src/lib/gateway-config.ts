@@ -6,7 +6,10 @@
  * agents/route.ts and models-summary.ts.
  */
 
-import { gatewayCall } from "./openclaw";
+import { gatewayCall, runCliCaptureBoth } from "./openclaw";
+import { getOpenClawHome } from "./paths";
+import { readFile, writeFile } from "fs/promises";
+import { join } from "path";
 
 // ── Helpers ──────────────────────────────────────
 
@@ -14,8 +17,127 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Keys that are RPC parameters for config.patch, NOT valid config keys.
+ * Some gateway versions accidentally persist these into openclaw.json.
+ */
+const LEAKED_RPC_KEYS = ["raw", "baseHash", "restartDelayMs"];
+
+/**
+ * Strip leaked RPC parameters from the config file on disk.
+ * Returns true if the file was modified.
+ */
+export async function sanitizeConfigFile(): Promise<boolean> {
+  const configPath = join(getOpenClawHome(), "openclaw.json");
+  let content: string;
+  try {
+    content = await readFile(configPath, "utf-8");
+  } catch {
+    return false;
+  }
+  let config: Record<string, unknown>;
+  try {
+    config = JSON.parse(content) as Record<string, unknown>;
+  } catch {
+    return false;
+  }
+  if (typeof config !== "object" || config === null || Array.isArray(config)) {
+    return false;
+  }
+  let changed = false;
+  for (const key of LEAKED_RPC_KEYS) {
+    if (key in config) {
+      delete config[key];
+      changed = true;
+    }
+  }
+  if (changed) {
+    await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  }
+  return changed;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+type ConfigSetEntry = {
+  path: string;
+  value: unknown;
+};
+
+const MAX_CONFIG_SET_FALLBACK_ENTRIES = 24;
+
+function collectConfigSetEntries(
+  patchObj: Record<string, unknown>,
+  prefix = "",
+): ConfigSetEntry[] {
+  const entries: ConfigSetEntry[] = [];
+  for (const [key, value] of Object.entries(patchObj)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (isRecord(value) && Object.keys(value).length > 0 && !key.includes(".")) {
+      entries.push(...collectConfigSetEntries(value, path));
+      continue;
+    }
+    entries.push({ path, value });
+  }
+  return entries;
+}
+
+function buildConfigSetFallbackEntries(
+  patchObj: Record<string, unknown>,
+): { entries: ConfigSetEntry[] | null; reason?: string } {
+  const entries = collectConfigSetEntries(patchObj).filter(
+    (entry) => entry.path.trim().length > 0,
+  );
+  if (entries.length === 0) {
+    return { entries: null, reason: "empty patch payload" };
+  }
+  if (entries.length > MAX_CONFIG_SET_FALLBACK_ENTRIES) {
+    return {
+      entries: null,
+      reason: `patch has ${entries.length} entries (limit: ${MAX_CONFIG_SET_FALLBACK_ENTRIES})`,
+    };
+  }
+
+  for (const entry of entries) {
+    if (entry.value === undefined) {
+      return { entries: null, reason: `unsupported undefined value for ${entry.path}` };
+    }
+    const encoded = JSON.stringify(entry.value);
+    if (encoded === undefined) {
+      return { entries: null, reason: `failed to encode JSON value for ${entry.path}` };
+    }
+  }
+
+  return { entries };
+}
+
+async function applyConfigSetFallback(entries: ConfigSetEntry[]): Promise<{
+  failures: Array<{ path: string; error: string }>;
+}> {
+  const failures: Array<{ path: string; error: string }> = [];
+
+  for (const entry of entries) {
+    try {
+      const encoded = JSON.stringify(entry.value);
+      if (encoded === undefined) {
+        throw new Error("Value cannot be encoded as JSON");
+      }
+      const setResult = await runCliCaptureBoth(
+        ["config", "set", "--strict-json", entry.path, encoded],
+        20000,
+      );
+      if (setResult.code !== 0) {
+        const details = String(setResult.stderr || setResult.stdout || "").trim();
+        throw new Error(details || `config set exited with code ${String(setResult.code)}`);
+      }
+    } catch (err) {
+      failures.push({ path: entry.path, error: String(err || "unknown error") });
+    }
+  }
+
+  return { failures };
 }
 
 // ── Transient error detection ────────────────────
@@ -114,6 +236,7 @@ export async function patchConfig(
 ): Promise<void> {
   const maxAttempts = opts?.maxAttempts ?? 8;
   const raw = JSON.stringify(patch);
+  const fallback = buildConfigSetFallbackEntries(patch);
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -123,15 +246,40 @@ export async function patchConfig(
         undefined,
         6000,
       );
-      const hash = String(configData.hash || "");
+      const hash = String(configData?.hash || "").trim();
       if (!hash) {
-        throw new Error("Missing config hash");
+        // Legacy gateway compatibility: some builds omit hash on config.get.
+        // First try config.patch without baseHash; if rejected, use CLI config.set fallback.
+        try {
+          const patchParams: Record<string, unknown> = { raw };
+          if (opts?.restartDelayMs) {
+            patchParams.restartDelayMs = opts.restartDelayMs;
+          }
+          await gatewayCall("config.patch", patchParams, 15000);
+          await sanitizeConfigFile().catch(() => {});
+          return;
+        } catch {
+          if (!fallback.entries) {
+            throw new Error(
+              `Compatibility patch unavailable: ${fallback.reason || "unsupported patch"}`,
+            );
+          }
+          const fallbackResult = await applyConfigSetFallback(fallback.entries);
+          if (fallbackResult.failures.length > 0) {
+            const first = fallbackResult.failures[0];
+            throw new Error(
+              `Compatibility patch failed at ${first.path}: ${first.error}`,
+            );
+          }
+          return;
+        }
       }
       const patchParams: Record<string, unknown> = { raw, baseHash: hash };
       if (opts?.restartDelayMs) {
         patchParams.restartDelayMs = opts.restartDelayMs;
       }
       await gatewayCall("config.patch", patchParams, 15000);
+      await sanitizeConfigFile().catch(() => {});
       return;
     } catch (error) {
       lastError = error;
