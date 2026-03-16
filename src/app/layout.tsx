@@ -10,6 +10,7 @@ import { ChatNotificationToast } from "@/components/chat-notification-toast";
 import { SetupGate } from "@/components/setup-gate";
 import { UsageAlertMonitor } from "@/components/usage-alert-monitor";
 import { OpenClawUpdateBanner } from "@/components/openclaw-update-banner";
+import { MissionControlUpdateBanner } from "@/components/mission-control-update-banner";
 import { CliModeBanner } from "@/components/cli-mode-banner";
 import { ToastRenderer } from "@/components/toast-renderer";
 import { DashboardTourGate } from "@/components/dashboard-tour-gate";
@@ -133,6 +134,7 @@ export default function RootLayout({
             <AgentChatPanel />
             <ChatNotificationToast />
             {!isHosted && <OpenClawUpdateBanner />}
+            {!isHosted && <MissionControlUpdateBanner />}
             <UsageAlertMonitor />
             <ToastRenderer />
           </SetupGate>
