@@ -15,7 +15,7 @@ const DISMISS_KEY = "cli-mode-banner-dismissed";
  * user is always informed after a cold start.
  */
 export function CliModeBanner() {
-  const { transport, initialCheckDone } = useGatewayStatusStore();
+  const { transport, transportConfigured, transportReason, initialCheckDone } = useGatewayStatusStore();
   const [dismissed, setDismissed] = useState(() => {
     if (typeof window === "undefined") return true;
     return sessionStorage.getItem(DISMISS_KEY) === "1";
@@ -33,6 +33,8 @@ export function CliModeBanner() {
   // Only render once we know the transport mode and the user hasn't dismissed
   if (!initialCheckDone || transport !== "cli" || dismissed) return null;
 
+  const isForcedCli = transportReason === "forced_cli" || transportConfigured === "cli";
+
   return (
     <div
       role="alert"
@@ -41,11 +43,28 @@ export function CliModeBanner() {
     >
       <TriangleAlert className="h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden />
       <p className="flex-1 text-xs font-medium">
-        Running in CLI fallback mode &mdash; HTTP transport is currently unavailable. Check Gateway connectivity or set{" "}
-        <code className="rounded bg-amber-400/20 px-1 py-0.5 font-mono text-[11px]">
-          OPENCLAW_TRANSPORT=http
-        </code>{" "}
-        on stable VPS setups.
+        {isForcedCli ? (
+          <>
+            Running in CLI mode because{" "}
+            <code className="rounded bg-amber-400/20 px-1 py-0.5 font-mono text-[11px]">
+              OPENCLAW_TRANSPORT=cli
+            </code>{" "}
+            is explicitly configured. Set{" "}
+            <code className="rounded bg-amber-400/20 px-1 py-0.5 font-mono text-[11px]">
+              OPENCLAW_TRANSPORT=auto
+            </code>{" "}
+            to re-enable automatic HTTP transport.
+          </>
+        ) : (
+          <>
+            Running in CLI fallback mode &mdash; HTTP transport is currently unavailable. Check Gateway connectivity and
+            auth configuration, or set{" "}
+            <code className="rounded bg-amber-400/20 px-1 py-0.5 font-mono text-[11px]">
+              OPENCLAW_TRANSPORT=http
+            </code>{" "}
+            on stable VPS setups.
+          </>
+        )}
       </p>
       <button
         type="button"

@@ -176,6 +176,12 @@ function humanizeRelayError(
   mode: BrowserMode
 ): string {
   const err = rawError.toLowerCase();
+  if (err.includes("missing scope") || err.includes("operator.read")) {
+    return "Browser relay is authenticated, but the paired device is missing operator.read. Update/re-pair the openclaw-control-ui device scopes, then retry.";
+  }
+  if (err.includes("403") && (err.includes("forbidden") || err.includes("scope"))) {
+    return "Browser relay request was rejected (403). Check paired device scopes, especially operator.read, then retry.";
+  }
   if (err.includes("econnrefused") || err.includes("connect") || err.includes("cdp")) {
     if (mode === "remote") {
       return "Could not reach remote CDP endpoint. Check node host/VPC networking, then retry reconnect.";
@@ -376,7 +382,7 @@ export function BrowserRelayView({ isHosted = false }: { isHosted?: boolean }) {
         setActionBusy(null);
       }
     },
-    [profile, snapshot]
+    [isHosted, profile, snapshot]
   );
 
   const copyPath = useCallback(async () => {
@@ -604,7 +610,14 @@ export function BrowserRelayView({ isHosted = false }: { isHosted?: boolean }) {
       );
     }
     if (snapshot.errors.status) {
-      notes.push("Relay status check failed. Use Refresh and verify browser process is alive.");
+      const statusErr = snapshot.errors.status.toLowerCase();
+      if (statusErr.includes("missing scope") || statusErr.includes("operator.read")) {
+        notes.push(
+          "Relay status is blocked by missing scope. Add operator.read to the paired openclaw-control-ui device and reconnect."
+        );
+      } else {
+        notes.push("Relay status check failed. Use Refresh and verify browser process is alive.");
+      }
     }
     if (!isHosted && mode === "extension" && snapshot.extension.error) {
       notes.push("Extension diagnostics reported an issue. Use Install Extension to repair.");

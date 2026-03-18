@@ -4,6 +4,8 @@ export type GatewayHealth = Record<string, unknown> | null;
 export type GatewayStatus = "online" | "degraded" | "offline" | "loading";
 /** Effective runtime transport reported by /api/status (for auto: "http" or "cli"). */
 export type TransportMode = "cli" | "auto" | string | null;
+export type TransportConfigured = "auto" | "cli" | "http" | null;
+export type TransportReason = "forced_cli" | "forced_http" | "auto_http" | "auto_fallback_cli" | null;
 
 type Snapshot = {
   status: GatewayStatus;
@@ -14,6 +16,10 @@ type Snapshot = {
   initialCheckDone: boolean;
   /** Effective transport from /api/status — "cli" means CLI fallback is active. */
   transport: TransportMode;
+  /** Static transport configured by env (OPENCLAW_TRANSPORT). */
+  transportConfigured: TransportConfigured;
+  /** Why this transport mode is active. */
+  transportReason: TransportReason;
 };
 
 const RESTART_EVENT = "gateway-restarting";
@@ -25,6 +31,8 @@ let snapshot: Snapshot = {
   latencyMs: null,
   initialCheckDone: false,
   transport: null,
+  transportConfigured: null,
+  transportReason: null,
 };
 
 const SERVER_SNAPSHOT: Snapshot = {
@@ -34,6 +42,8 @@ const SERVER_SNAPSHOT: Snapshot = {
   latencyMs: null,
   initialCheckDone: false,
   transport: null,
+  transportConfigured: null,
+  transportReason: null,
 };
 
 const VALID_STATUSES = new Set<GatewayStatus>(["online", "degraded", "offline", "loading"]);
@@ -85,6 +95,19 @@ async function pollLite() {
       status: nextStatus,
       latencyMs: typeof data.latencyMs === "number" ? data.latencyMs : null,
       transport: typeof data.transport === "string" ? data.transport : null,
+      transportConfigured:
+        data.transportConfigured === "auto" ||
+        data.transportConfigured === "cli" ||
+        data.transportConfigured === "http"
+          ? data.transportConfigured
+          : null,
+      transportReason:
+        data.transportReason === "forced_cli" ||
+        data.transportReason === "forced_http" ||
+        data.transportReason === "auto_http" ||
+        data.transportReason === "auto_fallback_cli"
+          ? data.transportReason
+          : null,
     });
     if (fastPollCount > 0) {
       // During restart recovery, keep fast polling until we confirm gateway is back.
