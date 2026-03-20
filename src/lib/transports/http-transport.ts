@@ -265,7 +265,11 @@ export class HttpTransport implements OpenClawClient {
       "tts.providers":  { providers: [] },
       "tts.enable":     { ok: true },
       "tts.disable":    { ok: true },
-      "tts.setProvider":{ ok: true },
+      "tts.setProvider":  { ok: true },
+      // These would shell out to openclaw CLI which takes 5s+ and pegs CPU — stub instead
+      "status":           { ok: true },
+      "usage.status":     { usage: null },
+      "channels.status":  { channels: {} },
     };
     if (method in emptyStubs) {
       return emptyStubs[method] as T;
@@ -276,20 +280,8 @@ export class HttpTransport implements OpenClawClient {
     if (method === "device.pair.list") return this.deviceListFromFiles<T>();
     if (method === "cron.list") return this.cronListFromFiles<T>();
 
-    // Remaining methods with CLI equivalents (used less frequently)
-    const cliMap: Record<string, string[]> = {
-      "status": ["status"],
-      "usage.status": ["usage", "status"],
-      "channels.status": ["channels", "status"],
-    };
-
-    const cliArgs = cliMap[method];
-    if (!cliArgs) {
-      throw new Error(`gatewayRpc: no CLI fallback for method '${method}' (missing scope: operator.read)`);
-    }
-
-    const raw = await this.execLocal(`openclaw ${cliArgs.join(" ")} --json`, timeout);
-    return parseJsonFromCliOutput<T>(raw, `openclaw ${cliArgs.join(" ")} --json`);
+    // No fallback available
+    throw new Error(`gatewayRpc: no local fallback for method '${method}' (missing scope: operator.read)`);
   }
 
   private async sessionsListFromFiles<T>(): Promise<T> {
