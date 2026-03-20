@@ -133,9 +133,53 @@ export class HttpTransport implements OpenClawClient {
 
   // ── OpenClawClient interface ──────────────────────
 
+  /**
+   * Try to run a command locally via child_process (works when MC and the
+   * gateway run on the same machine). Falls back to the gateway exec tool
+   * when the local binary is not found.
+   */
+  private async execLocal(
+    command: string,
+    timeout = 15000,
+    stdin?: string,
+  ): Promise<string> {
+    try {
+      const { execFile } = await import("child_process");
+      const { promisify } = await import("util");
+      const execFileAsync = promisify(execFile);
+
+      const parts = command.split(/\s+/);
+      const bin = parts[0];
+      const cmdArgs = parts.slice(1);
+
+      const result = await execFileAsync(bin, cmdArgs, {
+        timeout,
+        maxBuffer: 10 * 1024 * 1024, // 10 MB
+        env: process.env,
+        ...(stdin ? { input: stdin } : {}),
+      });
+      // Strip diagnostic lines that some openclaw plugins print to stdout
+      // (e.g. "[plugins] openclaw-mem0: registered ...") — these break JSON parsing.
+      const stdout = result.stdout
+        .split("\n")
+        .filter((line) => !line.startsWith("[plugins]") && !line.startsWith("[warn]") && !line.startsWith("[info]"))
+        .join("\n");
+      return stdout;
+    } catch (localErr: unknown) {
+      // If local exec fails because the binary doesn't exist, try gateway exec
+      const code = (localErr as { code?: string }).code;
+      if (code === "ENOENT" || code === "EACCES") {
+        return this.execCommand(command, timeout);
+      }
+      // For other errors (non-zero exit), surface the stderr
+      const err = localErr as { stdout?: string; stderr?: string; message?: string };
+      throw new Error(err.stderr || err.message || String(localErr));
+    }
+  }
+
   async runJson<T>(args: string[], timeout = 15000): Promise<T> {
     const command = `openclaw ${args.join(" ")} --json`;
-    const raw = await this.execCommand(command, timeout);
+    const raw = await this.execLocal(command, timeout);
     return parseJsonFromCliOutput<T>(raw, command);
   }
 
@@ -145,19 +189,13 @@ export class HttpTransport implements OpenClawClient {
     stdin?: string,
   ): Promise<string> {
     const command = `openclaw ${args.join(" ")}`;
-    if (stdin) {
-      const result = await this.invoke<
-        { output?: string; stdout?: string; result?: string; content?: unknown; details?: unknown } | string
-      >("exec", { command, stdin }, timeout, "json");
-      return this.resultToText(result);
-    }
-    return this.execCommand(command, timeout);
+    return this.execLocal(command, timeout, stdin);
   }
 
   async runCapture(args: string[], timeout = 15000): Promise<RunCliResult> {
     const command = `openclaw ${args.join(" ")}`;
     try {
-      const stdout = await this.execCommand(command, timeout);
+      const stdout = await this.execLocal(command, timeout);
       return { stdout, stderr: "", code: 0 };
     } catch (err) {
       return {
