@@ -298,9 +298,9 @@ export class HttpTransport implements OpenClawClient {
         try {
           const raw = await readFile(sessionsPath, "utf-8");
           const data = JSON.parse(raw) as Record<string, unknown>;
-          for (const session of Object.values(data)) {
+          for (const [sessionKey, session] of Object.entries(data)) {
             if (session && typeof session === "object") {
-              allSessions.push({ agentId: agent.name, ...(session as object) });
+              allSessions.push({ key: sessionKey, agentId: agent.name, ...(session as object) });
             }
           }
         } catch { /* skip missing */ }
