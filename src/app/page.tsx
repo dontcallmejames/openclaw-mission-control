@@ -35,6 +35,7 @@ const SECTION_TO_PATH: Record<string, string> = {
   integrations: "/integrations",
   search: "/search",
   help: "/help",
+  projects: "/projects",
 };
 
 const isAgentbayHosted =

@@ -401,7 +401,7 @@ export function TasksView() {
             <div
               key={col.id}
               className={cn(
-                "flex w-[280px] md:w-80 flex-shrink-0 flex-col min-w-0 overflow-hidden rounded-xl border border-foreground/5 bg-muted/30 py-3 px-3 transition-all",
+                "flex w-[280px] md:w-80 flex-shrink-0 flex-col min-w-0 overflow-visible rounded-xl border border-foreground/5 bg-muted/30 py-3 px-3 transition-all",
                 isDragTarget && "bg-violet-500/10 border-violet-500/20 ring-1 ring-inset ring-violet-500/20"
               )}
               onDragOver={(e) => {
@@ -477,7 +477,7 @@ export function TasksView() {
                 />
               )}
 
-              <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto overflow-x-hidden min-w-0">
+              <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto overflow-x-hidden min-w-0 max-h-[60vh]">
                 {colTasks.length === 0 && addingToColumn !== col.id ? (
                   <div className={cn(
                     "flex items-center justify-center rounded-lg border border-dashed py-8 text-xs transition-colors",
