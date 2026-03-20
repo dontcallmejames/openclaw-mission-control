@@ -214,10 +214,45 @@ export class HttpTransport implements OpenClawClient {
     params?: Record<string, unknown>,
     timeout = 15000,
   ): Promise<T> {
+    // config.get / config.schema require operator.read/admin scope on WS,
+    // but gateway.auth.token doesn't grant those. Serve locally instead.
+    if (method === "config.get") {
+      return this.configGetViaCli<T>(timeout);
+    }
+    if (method === "config.schema") {
+      // Return empty schema — config page degrades gracefully without it.
+      return { schema: {}, uiHints: {} } as unknown as T;
+    }
+
     if (!this.rpcClient) {
       this.rpcClient = new GatewayRpcClient(this.gatewayUrlCache || undefined, this.rpcToken);
     }
     return this.rpcClient.request<T>(method, params || {}, timeout);
+  }
+
+  private async configGetViaCli<T>(timeout = 15000): Promise<T> {
+    // Replicate the config.get RPC response shape: { parsed, resolved, hash }
+    // by reading openclaw.json directly from disk (same machine).
+    const { readFile } = await import("fs/promises");
+    const { createHash } = await import("crypto");
+    const { join } = await import("path");
+    const home = process.env.OPENCLAW_STATE_DIR || join(process.env.HOME || "/root", ".openclaw");
+    const configPath = join(home, "openclaw.json");
+
+    let parsed: Record<string, unknown> = {};
+    let raw = "";
+    try {
+      raw = await readFile(configPath, "utf-8");
+      parsed = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      // empty config — return empty shape
+    }
+
+    // Compute a hash so config.patch baseHash checks work
+    const hash = raw ? createHash("sha256").update(raw).digest("hex").slice(0, 16) : "";
+
+    // resolved = parsed (no env substitution here, same as the degraded fallback)
+    return { parsed, resolved: parsed, hash } as unknown as T;
   }
 
   async readFile(path: string): Promise<string> {
