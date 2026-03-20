@@ -10,6 +10,7 @@ import {
   Clock,
   Cpu,
   DollarSign,
+  ExternalLink,
   RefreshCw,
   TrendingUp,
   Users,
@@ -109,6 +110,34 @@ function FreshnessDot({ freshness }: { freshness: ProviderBillingFreshness }) {
       />
     </span>
   );
+}
+
+function ProviderLogo({ provider, name }: { provider: string; name: string }) {
+  const cls = "h-5 w-5";
+  if (provider === "openrouter") {
+    return (
+      <svg viewBox="0 0 24 24" className={cls} fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 2L2 7l10 5 10-5-10-5z" />
+        <path d="M2 17l10 5 10-5" />
+        <path d="M2 12l10 5 10-5" />
+      </svg>
+    );
+  }
+  if (provider === "openai") {
+    return (
+      <svg viewBox="0 0 24 24" className={cls} fill="currentColor">
+        <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z" />
+      </svg>
+    );
+  }
+  if (provider === "anthropic") {
+    return (
+      <svg viewBox="0 0 24 24" className={cls} fill="currentColor">
+        <path d="M13.827 3.52h3.603L24 20.48h-3.603l-6.57-16.96zm-7.258 0h3.767L16.906 20.48h-3.674l-1.343-3.461H5.017l-1.344 3.46H0l6.569-16.96zm2.327 5.093L6.453 14.58h4.886L8.896 8.613z" />
+      </svg>
+    );
+  }
+  return <span className="text-sm font-bold">{name.charAt(0).toUpperCase()}</span>;
 }
 
 /* ── Section sub-heading ────────────────────────── */
@@ -218,51 +247,51 @@ function ModelUsageTable({ rows }: { rows: ModelRow[] }) {
 
   return (
     <div className="overflow-hidden rounded-xl border border-[#23282e]">
-      {/* Header */}
-      <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 border-b border-[#23282e] bg-[#15191d] px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-[#7a8591]">
-        <span>Model</span>
-        <span className="hidden text-right sm:block">Sessions</span>
-        <span className="text-right">Input</span>
-        <span className="text-right">Output</span>
-        <span className="text-right">Est. Cost</span>
-      </div>
-
-      {/* Rows */}
-      <div className="divide-y divide-[#23282e]">
-        {sorted.map((row) => {
-          const friendly = getFriendlyModelName(row.fullModel);
-          const provider = getProviderDisplayName(row.provider);
-          return (
-            <div
-              key={row.fullModel}
-              className="group grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-x-4 px-4 py-3 transition-colors hover:bg-[#15191d]"
-            >
-              {/* Model name + progress bar */}
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-[#f5f7fa]">{friendly}</p>
-                <p className="mt-0.5 truncate text-[11px] text-[#7a8591]">{provider}</p>
-                <ProgressBar
-                  value={row.totalTokens}
-                  max={maxTokens}
-                  className="mt-1.5 max-w-[200px]"
-                />
-              </div>
-              <span className="hidden text-right text-sm text-[#a8b0ba] sm:block">
-                {formatNumber(row.sessions)}
-              </span>
-              <span className="text-right font-mono text-xs text-[#a8b0ba]">
-                {formatCompact(row.inputTokens)}
-              </span>
-              <span className="text-right font-mono text-xs text-[#a8b0ba]">
-                {formatCompact(row.outputTokens)}
-              </span>
-              <span className="text-right font-mono text-xs text-[#34d399]">
-                {formatUsd(row.estimatedCostUsd)}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+      <table className="w-full border-collapse">
+        <thead>
+          <tr className="border-b border-[#23282e] bg-[#15191d] text-[11px] font-semibold uppercase tracking-wider text-[#7a8591]">
+            <th className="px-4 py-2.5 text-left">Model</th>
+            <th className="hidden px-4 py-2.5 text-right sm:table-cell">Sessions</th>
+            <th className="whitespace-nowrap px-4 py-2.5 text-right">Input</th>
+            <th className="whitespace-nowrap px-4 py-2.5 text-right">Output</th>
+            <th className="whitespace-nowrap px-4 py-2.5 text-right">Est. Cost (Local)</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-[#23282e]">
+          {sorted.map((row) => {
+            const friendly = getFriendlyModelName(row.fullModel);
+            const provider = getProviderDisplayName(row.provider);
+            return (
+              <tr
+                key={row.fullModel}
+                className="transition-colors hover:bg-[#15191d]"
+              >
+                <td className="min-w-0 px-4 py-3">
+                  <p className="truncate text-sm font-medium text-[#f5f7fa]">{friendly}</p>
+                  <p className="mt-0.5 truncate text-[11px] text-[#7a8591]">{provider}</p>
+                  <ProgressBar
+                    value={row.totalTokens}
+                    max={maxTokens}
+                    className="mt-1.5 max-w-[200px]"
+                  />
+                </td>
+                <td className="hidden px-4 py-3 text-right text-sm text-[#a8b0ba] sm:table-cell">
+                  {formatNumber(row.sessions)}
+                </td>
+                <td className="px-4 py-3 text-right font-mono text-xs text-[#a8b0ba]">
+                  {formatCompact(row.inputTokens)}
+                </td>
+                <td className="px-4 py-3 text-right font-mono text-xs text-[#a8b0ba]">
+                  {formatCompact(row.outputTokens)}
+                </td>
+                <td className="px-4 py-3 text-right font-mono text-xs text-[#34d399]">
+                  {formatUsd(row.estimatedCostUsd)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -318,54 +347,195 @@ function AgentUsageTable({ rows }: { rows: AgentRow[] }) {
 
 /* ── Provider Billing card ───────────────────────── */
 
-function ProviderBillingCard({ p }: { p: ProviderBillingProviderSnapshot }) {
+function ProviderBillingCard({
+  p,
+  onCredentialSaved,
+}: {
+  p: ProviderBillingProviderSnapshot;
+  onCredentialSaved?: () => void;
+}) {
+  const [credentialDraft, setCredentialDraft] = useState("");
+  const [teamIdDraft, setTeamIdDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveOk, setSaveOk] = useState<string | null>(null);
   const displayName = getProviderDisplayName(p.provider);
+  const statusLabel = !p.available
+    ? "Setup needed"
+    : p.billingMode === "estimate_only"
+      ? "Estimate only"
+      : p.rows.length === 0
+        ? "No invoice rows yet"
+        : "Invoice-grade";
+
+  const statusTone = !p.available
+    ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
+    : p.billingMode === "estimate_only"
+      ? "border-sky-500/30 bg-sky-500/10 text-sky-300"
+      : p.rows.length === 0
+        ? "border-violet-500/30 bg-violet-500/10 text-violet-300"
+        : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300";
+
+  const guidance = !p.available
+    ? p.reason || "Billing collector is not configured."
+    : p.reason || p.setupHint;
+
+  const secondaryCredentialKey = p.provider === "xai" ? "XAI_TEAM_ID" : null;
+
+  async function saveCredentials() {
+    if (!p.requiredCredential || !credentialDraft.trim()) {
+      setSaveError(`Enter ${p.requiredCredential || "credential"} first.`);
+      return;
+    }
+    if (secondaryCredentialKey && !teamIdDraft.trim()) {
+      setSaveError(`Enter ${secondaryCredentialKey} first.`);
+      return;
+    }
+
+    setSaving(true);
+    setSaveError(null);
+    setSaveOk(null);
+    try {
+      const values: Record<string, string> = {
+        [p.requiredCredential]: credentialDraft.trim(),
+      };
+      if (secondaryCredentialKey) {
+        values[secondaryCredentialKey] = teamIdDraft.trim();
+      }
+      const res = await fetch(`/api/usage/providers/${p.provider}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "save-credentials", values }),
+        signal: AbortSignal.timeout(12000),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        throw new Error(String(data.error || "Failed to save credentials"));
+      }
+      setCredentialDraft("");
+      setTeamIdDraft("");
+      setSaveOk("Saved. Usage collectors will refresh shortly.");
+      onCredentialSaved?.();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save credentials");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
-    <div className="flex items-center gap-4 rounded-xl border border-[#23282e] bg-[#15191d] p-4">
+    <div className="space-y-3 rounded-xl border border-[#23282e] bg-[#15191d] p-4">
+      <div className="flex items-center gap-4">
       {/* Avatar */}
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#2c343d] bg-[#20252a] text-sm font-bold text-[#a8b0ba]">
-        {displayName.charAt(0).toUpperCase()}
-      </div>
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#2c343d] bg-[#20252a] text-[#a8b0ba]">
+          <ProviderLogo provider={p.provider} name={displayName} />
+        </div>
 
       {/* Name + freshness */}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <FreshnessDot freshness={p.freshness} />
-          <span className="text-sm font-semibold text-[#f5f7fa]">{displayName}</span>
-        </div>
-        <p className="mt-0.5 text-[11px] text-[#7a8591]">
-          Updated{" "}
-          {p.latestBucketStartMs !== null ? formatAge(p.latestBucketStartMs) : "never"}
-        </p>
-      </div>
-
-      {/* Spend columns */}
-      <div className="hidden gap-6 sm:flex">
-        <div className="text-right">
-          <p className="text-[10px] font-medium uppercase tracking-wide text-[#7a8591]">
-            Current Month
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <FreshnessDot freshness={p.freshness} />
+            <span className="text-sm font-semibold text-[#f5f7fa]">{displayName}</span>
+            <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", statusTone)}>
+              {statusLabel}
+            </span>
+          </div>
+          <p className="mt-0.5 text-[11px] text-[#7a8591]">
+            Updated{" "}
+            {p.latestBucketStartMs !== null ? formatAge(p.latestBucketStartMs) : "never"}
           </p>
-          <p className="mt-0.5 font-mono text-sm font-semibold text-[#f5f7fa]">
+        </div>
+
+        {/* Spend columns */}
+        <div className="hidden gap-6 sm:flex">
+          <div className="text-right">
+            <p className="text-[10px] font-medium uppercase tracking-wide text-[#7a8591]">
+              Current Month
+            </p>
+            <p className="mt-0.5 font-mono text-sm font-semibold text-[#f5f7fa]">
+              {formatUsd(p.currentMonthUsd)}
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-[10px] font-medium uppercase tracking-wide text-[#7a8591]">
+              Last 30 Days
+            </p>
+            <p className="mt-0.5 font-mono text-sm font-semibold text-[#f5f7fa]">
+              {formatUsd(p.totalUsd30d)}
+            </p>
+          </div>
+        </div>
+
+        {/* Mobile spend */}
+        <div className="flex flex-col items-end gap-0.5 sm:hidden">
+          <p className="font-mono text-sm font-semibold text-[#f5f7fa]">
             {formatUsd(p.currentMonthUsd)}
           </p>
-        </div>
-        <div className="text-right">
-          <p className="text-[10px] font-medium uppercase tracking-wide text-[#7a8591]">
-            Last 30 Days
-          </p>
-          <p className="mt-0.5 font-mono text-sm font-semibold text-[#f5f7fa]">
-            {formatUsd(p.totalUsd30d)}
-          </p>
+          <p className="text-[10px] text-[#7a8591]">this month</p>
         </div>
       </div>
 
-      {/* Mobile spend */}
-      <div className="flex flex-col items-end gap-0.5 sm:hidden">
-        <p className="font-mono text-sm font-semibold text-[#f5f7fa]">
-          {formatUsd(p.currentMonthUsd)}
-        </p>
-        <p className="text-[10px] text-[#7a8591]">this month</p>
-      </div>
+      {(guidance || (!p.available && p.requiredCredential) || p.docsUrl) && (
+        <div className="rounded-lg border border-[#23282e] bg-[#111417] px-3 py-2.5">
+          {guidance && <p className="text-xs text-[#a8b0ba]">{guidance}</p>}
+          {!p.available && p.requiredCredential && (
+            <p className="mt-1.5 text-xs text-amber-300">
+              Add <code className="font-mono">{p.requiredCredential}</code> to unlock real provider billing.
+            </p>
+          )}
+          {p.docsUrl && (
+            <a
+              href={p.docsUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1.5 inline-flex items-center gap-1 text-xs text-[#34d399] hover:underline"
+            >
+              Provider billing docs
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
+          <p className="mt-1 text-[11px] text-[#7a8591]">
+            Billing mode: {p.billingMode === "invoice_api" ? "Invoice API" : "Estimate only"}
+          </p>
+
+          {!p.available && p.requiredCredential && (
+            <div className="mt-2 space-y-2">
+              <input
+                type="password"
+                value={credentialDraft}
+                onChange={(e) => setCredentialDraft(e.target.value)}
+                placeholder={`Enter ${p.requiredCredential}`}
+                disabled={saving}
+                className="w-full rounded-md border border-[#2c343d] bg-[#15191d] px-2.5 py-2 text-xs text-[#f5f7fa] placeholder:text-[#7a8591] focus:border-[#34d399]/40 focus:outline-none"
+              />
+              {secondaryCredentialKey && (
+                <input
+                  type="text"
+                  value={teamIdDraft}
+                  onChange={(e) => setTeamIdDraft(e.target.value)}
+                  placeholder={`Enter ${secondaryCredentialKey}`}
+                  disabled={saving}
+                  className="w-full rounded-md border border-[#2c343d] bg-[#15191d] px-2.5 py-2 text-xs text-[#f5f7fa] placeholder:text-[#7a8591] focus:border-[#34d399]/40 focus:outline-none"
+                />
+              )}
+              <div className="flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void saveCredentials();
+                  }}
+                  disabled={saving}
+                  className="rounded-md bg-[#34d399] px-3 py-1.5 text-xs font-semibold text-[#0d1117] transition-colors hover:bg-[#2dbe8c] disabled:opacity-60"
+                >
+                  {saving ? "Saving..." : "Save credential"}
+                </button>
+              </div>
+              {saveError && <p className="text-xs text-red-300">{saveError}</p>}
+              {saveOk && <p className="text-xs text-emerald-300">{saveOk}</p>}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -532,9 +702,42 @@ export function UsageView() {
   const windowSpend = data?.estimatedSpend.windows[activeWindow];
   const byModel = data?.liveTelemetry.byModel ?? [];
   const byAgent = data?.liveTelemetry.byAgent ?? [];
-  const availableProviders = (data?.providerBilling.providers ?? []).filter((p) => p.available);
+  const configuredBillingProviders = new Set(
+    (data?.providerBilling.configuredProviders ?? []).map((provider) => provider.toLowerCase()),
+  );
+  const providerBillingRows = (data?.providerBilling.providers ?? []).filter((provider) =>
+    configuredBillingProviders.has(provider.provider.toLowerCase()),
+  );
   const spendByModel = data?.estimatedSpend.byModel ?? [];
   const diagnostics = data?.diagnostics;
+  const providerInvoiceCurrentMonthUsd = providerBillingRows.reduce(
+    (sum, provider) => sum + (provider.currentMonthUsd ?? 0),
+    0,
+  );
+  const hasProviderInvoiceTotals = providerBillingRows.some((provider) => provider.currentMonthUsd !== null);
+  const headlineCostUsd = hasProviderInvoiceTotals
+    ? providerInvoiceCurrentMonthUsd
+    : data?.estimatedSpend.totalUsd ?? null;
+  const hasWindowActivity = Boolean(
+    windowBucket &&
+      (windowBucket.sessions > 0 ||
+        windowBucket.totalTokens > 0 ||
+        windowBucket.inputTokens > 0 ||
+        windowBucket.outputTokens > 0),
+  );
+  const showingWindowFallback = !hasWindowActivity;
+  const displayWindowSessions = hasWindowActivity
+    ? (windowBucket?.sessions ?? 0)
+    : (totals?.sessions ?? 0);
+  const displayWindowTotalTokens = hasWindowActivity
+    ? (windowBucket?.totalTokens ?? 0)
+    : (totals?.totalTokens ?? 0);
+  const displayWindowInputTokens = hasWindowActivity
+    ? (windowBucket?.inputTokens ?? 0)
+    : (totals?.inputTokens ?? 0);
+  const displayWindowOutputTokens = hasWindowActivity
+    ? (windowBucket?.outputTokens ?? 0)
+    : (totals?.outputTokens ?? 0);
 
   const asOf = data?.asOfMs ?? null;
 
@@ -568,12 +771,14 @@ export function UsageView() {
                 accent="text-[#34d399]"
               />
               <StatCard
-                label="Estimated Cost"
-                value={formatUsd(data.estimatedSpend.totalUsd)}
+                label={hasProviderInvoiceTotals ? "Current Month Cost" : "Estimated Cost"}
+                value={formatUsd(headlineCostUsd)}
                 sub={
-                  data.coverage.estimatedPricingCoveragePct > 0
-                    ? `${Math.round(data.coverage.estimatedPricingCoveragePct)}% coverage`
-                    : "No pricing data — subscription auth doesn't expose costs"
+                  hasProviderInvoiceTotals
+                    ? `Provider invoice totals (${providerBillingRows.filter((provider) => provider.currentMonthUsd !== null).length})`
+                    : data.coverage.estimatedPricingCoveragePct > 0
+                      ? `${Math.round(data.coverage.estimatedPricingCoveragePct)}% coverage`
+                      : "No pricing data — subscription auth doesn't expose costs"
                 }
                 icon={<DollarSign className="h-4 w-4" />}
                 accent="text-emerald-400"
@@ -605,6 +810,9 @@ export function UsageView() {
                 </SubHeading>
                 <WindowSelector active={activeWindow} onChange={setActiveWindow} />
               </div>
+              <p className="text-xs text-[#a8b0ba]">
+                Window stats are local telemetry estimates and may differ from provider invoices.
+              </p>
 
               {windowBucket && (
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -613,7 +821,7 @@ export function UsageView() {
                       Sessions
                     </p>
                     <p className="mt-1 text-lg font-bold text-[#f5f7fa]">
-                      {formatNumber(windowBucket.sessions)}
+                      {formatNumber(displayWindowSessions)}
                     </p>
                   </div>
                   <div className="rounded-xl border border-[#23282e] bg-[#15191d] p-3">
@@ -621,7 +829,7 @@ export function UsageView() {
                       Total Tokens
                     </p>
                     <p className="mt-1 text-lg font-bold text-[#f5f7fa]">
-                      {formatCompact(windowBucket.totalTokens)}
+                      {formatCompact(displayWindowTotalTokens)}
                     </p>
                   </div>
                   <div className="rounded-xl border border-[#23282e] bg-[#15191d] p-3">
@@ -629,7 +837,7 @@ export function UsageView() {
                       Input Tokens
                     </p>
                     <p className="mt-1 text-lg font-bold text-[#f5f7fa]">
-                      {formatCompact(windowBucket.inputTokens)}
+                      {formatCompact(displayWindowInputTokens)}
                     </p>
                   </div>
                   <div className="rounded-xl border border-[#23282e] bg-[#15191d] p-3">
@@ -637,7 +845,7 @@ export function UsageView() {
                       Output Tokens
                     </p>
                     <p className="mt-1 text-lg font-bold text-[#f5f7fa]">
-                      {formatCompact(windowBucket.outputTokens)}
+                      {formatCompact(displayWindowOutputTokens)}
                     </p>
                   </div>
                   {windowSpend?.usd !== null && windowSpend !== undefined && (
@@ -659,6 +867,11 @@ export function UsageView() {
                   )}
                 </div>
               )}
+              {showingWindowFallback && (
+                <p className="text-xs text-[#a8b0ba]">
+                  No recent activity in this time window yet. Showing overall totals instead.
+                </p>
+              )}
             </div>
 
             {/* ── Token Usage by Model ── */}
@@ -669,6 +882,9 @@ export function UsageView() {
                   Token Usage by Model
                 </span>
               </SubHeading>
+              <p className="mb-2 text-xs text-[#a8b0ba]">
+                Costs in this table are estimated from local usage, not invoice-grade billing.
+              </p>
               <ModelUsageTable rows={byModel} />
             </div>
 
@@ -684,17 +900,23 @@ export function UsageView() {
             </div>
 
             {/* ── Provider Billing ── */}
-            {availableProviders.length > 0 && (
+            {providerBillingRows.length > 0 && (
               <div>
-                <SubHeading count={availableProviders.length}>
+                <SubHeading count={providerBillingRows.length}>
                   <span className="flex items-center gap-1.5">
                     <DollarSign className="h-3.5 w-3.5" />
                     Provider Billing
                   </span>
                 </SubHeading>
                 <div className="space-y-2">
-                  {availableProviders.map((p) => (
-                    <ProviderBillingCard key={p.provider} p={p} />
+                  {providerBillingRows.map((p) => (
+                    <ProviderBillingCard
+                      key={p.provider}
+                      p={p}
+                      onCredentialSaved={() => {
+                        void fetchData();
+                      }}
+                    />
                   ))}
                 </div>
               </div>

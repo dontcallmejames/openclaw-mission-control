@@ -277,7 +277,7 @@ export class GatewayRpcClient {
             instanceId: `pid-${process.pid}`,
           },
           role: "operator",
-          scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+          scopes: ["operator.read", "operator.admin", "operator.approvals", "operator.pairing"],
           caps: [],
           ...(this.token ? { auth: { token: this.token } } : {}),
           locale: "en-US",

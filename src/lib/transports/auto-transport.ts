@@ -1,9 +1,8 @@
 /**
  * Auto transport — tries HTTP first, falls back to CLI.
  *
- * Probes the Gateway's HTTP endpoint on first use and caches the result
- * for 60 seconds. If the Gateway is reachable over HTTP, uses HttpTransport;
- * otherwise falls back to CliTransport.
+ * Probes /tools/invoke (not just "/") so non-200 root responses don't
+ * incorrectly demote transport to CLI on VPS/reverse-proxy setups.
  */
 
 import type { OpenClawClient, TransportMode } from "../openclaw-client";
@@ -11,20 +10,50 @@ import type { RunCliResult } from "../openclaw-cli";
 import { CliTransport } from "./cli-transport";
 import { HttpTransport } from "./http-transport";
 
+function errorToMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
 export class AutoTransport implements OpenClawClient {
   private cli = new CliTransport();
   private http = new HttpTransport();
   private preferHttp = false;
   private lastProbe = 0;
   private probing: Promise<void> | null = null;
-  // Re-probe quickly after a fallback (15s) so HTTP is rediscovered fast.
+  // Re-probe quickly after a fallback (3s) so HTTP is rediscovered fast.
   // Use a longer interval (60s) when the transport is stable.
   private readonly probeIntervalStableMs = 60_000;
-  private readonly probeIntervalRecoveryMs = 15_000;
+  private readonly probeIntervalRecoveryMs = 3_000;
+  private readonly probeTimeoutMs = 2_000;
   private inRecovery = false;
 
   getTransport(): TransportMode {
     return "auto";
+  }
+
+  async resolveTransport(): Promise<TransportMode> {
+    await this.probe();
+    return this.preferHttp ? "http" : "cli";
+  }
+
+  private shouldUseHttpForStatus(status: number): boolean {
+    // 404 means "/tools/invoke" is missing; 401/403 means auth rejects requests.
+    // In both cases, command invocation over HTTP won't work.
+    if (status === 404 || status === 401 || status === 403) return false;
+    // Any non-5xx implies the Gateway is reachable and potentially usable.
+    return status < 500;
+  }
+
+  private markHttpFailed(reason: string): void {
+    const wasHttp = this.preferHttp;
+    this.preferHttp = false;
+    this.inRecovery = true;
+    // Force a quick re-probe on the next request.
+    this.lastProbe = Date.now() - this.probeIntervalRecoveryMs;
+    if (wasHttp) {
+      console.warn(`[AutoTransport] HTTP failed, falling back to CLI: ${reason}`);
+    }
   }
 
   /** Probe Gateway availability and cache the result. */
@@ -36,19 +65,27 @@ export class AutoTransport implements OpenClawClient {
     // Deduplicate concurrent probes.
     if (this.probing) return this.probing;
     this.probing = (async () => {
+      const hadHttp = this.preferHttp;
       try {
-        // Try reaching the Gateway over HTTP regardless of whether a
-        // token is configured. Loopback and same-network connections
-        // are often trusted without auth. If auth IS required for
-        // actual commands, withFallback() will catch the 401/403 and
-        // retry via CLI — then the next probe cycle re-evaluates.
-        const res = await this.http.gatewayFetch("/", {
-          signal: AbortSignal.timeout(2000),
+        // Probe the actual invoke endpoint instead of GET /.
+        const res = await this.http.gatewayFetch("/tools/invoke", {
+          method: "HEAD",
+          signal: AbortSignal.timeout(this.probeTimeoutMs),
         });
-        this.preferHttp = res.ok;
-        if (res.ok) this.inRecovery = false;
-      } catch {
-        this.preferHttp = false;
+        const allowHttp = this.shouldUseHttpForStatus(res.status);
+        this.preferHttp = allowHttp;
+        this.inRecovery = !allowHttp;
+
+        if (allowHttp && !hadHttp) {
+          console.info("[AutoTransport] HTTP transport restored.");
+        }
+        if (!allowHttp && hadHttp) {
+          console.warn(
+            `[AutoTransport] Probe switched to CLI fallback (HTTP ${res.status}).`
+          );
+        }
+      } catch (err) {
+        this.markHttpFailed(errorToMessage(err));
       } finally {
         this.lastProbe = Date.now();
         this.probing = null;
@@ -71,12 +108,7 @@ export class AutoTransport implements OpenClawClient {
       return await fn(primary);
     } catch (err) {
       if (primary === this.http) {
-        // Mark HTTP as unavailable and retry with CLI.
-        // Enter recovery mode so the next probe fires in 15s instead
-        // of 60s — rediscovers HTTP quickly after a transient failure.
-        this.preferHttp = false;
-        this.inRecovery = true;
-        this.lastProbe = Date.now();
+        this.markHttpFailed(errorToMessage(err));
         return fn(this.cli);
       }
       throw err;
@@ -98,10 +130,7 @@ export class AutoTransport implements OpenClawClient {
     if (this.preferHttp) {
       const result = await this.http.runCapture(args, timeout);
       if (result.code !== 0 && result.stderr?.includes("/tools/invoke")) {
-        // HTTP transport failed due to unavailable gateway tool — fall back to CLI
-        this.preferHttp = false;
-        this.inRecovery = true;
-        this.lastProbe = Date.now();
+        this.markHttpFailed(result.stderr || `openclaw ${args.join(" ")} failed over HTTP`);
         return this.cli.runCapture(args, timeout);
       }
       return result;

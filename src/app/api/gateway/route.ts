@@ -119,6 +119,59 @@ async function probeGatewayHttp(): Promise<{
   }
 }
 
+type GatewayPayload = {
+  status: "online" | "degraded" | "offline";
+  health: Record<string, unknown>;
+  gatewayStatus?: Record<string, unknown>;
+};
+
+const GATEWAY_RESPONSE_TTL_MS = 2500;
+let gatewayResponseCache: { payload: GatewayPayload; expiresAt: number } | null = null;
+let gatewayResponseInFlight: Promise<GatewayPayload> | null = null;
+
+function getCachedGatewayPayload(now = Date.now()): GatewayPayload | null {
+  if (!gatewayResponseCache || gatewayResponseCache.expiresAt <= now) return null;
+  return gatewayResponseCache.payload;
+}
+
+async function computeGatewayPayload(): Promise<GatewayPayload> {
+  // Fast liveness check first
+  const probe = await probeGatewayHttp();
+  if (!probe.ok) {
+    return {
+      status: "offline",
+      health: { ok: false, error: "Gateway HTTP endpoint not reachable" },
+    };
+  }
+
+  // Gateway is alive — ensure OpenResponses endpoint is enabled for streaming chat
+  ensureResponsesEndpoint();
+
+  // Full health call first. Status call is optional and only fetched when healthy.
+  try {
+    const health = await gatewayCall<Record<string, unknown>>("health", {}, 12000);
+    let status: Record<string, unknown> | null = null;
+    if ((health as { ok?: unknown })?.ok === true) {
+      status = await gatewayCall<Record<string, unknown>>("status", {}, 4000).catch(() => null);
+    }
+    const gwStatus: GatewayPayload["status"] =
+      (health as { ok?: unknown })?.ok === true ? "online" : "degraded";
+    return {
+      status: gwStatus,
+      health,
+      ...(status ? { gatewayStatus: status } : {}),
+    };
+  } catch {
+    // RPC failed — but gateway IS reachable via HTTP
+  }
+
+  // Gateway is reachable but full health data unavailable — report online
+  return {
+    status: "online",
+    health: { ok: true, port: probe.port, note: "Lite probe (full health unavailable)" },
+  };
+}
+
 /**
  * GET /api/gateway - Returns gateway health status.
  *
@@ -130,43 +183,44 @@ async function probeGatewayHttp(): Promise<{
  */
 export async function GET() {
   const start = Date.now();
-  // Fast liveness check first
-  const probe = await probeGatewayHttp();
+  try {
+    const cached = getCachedGatewayPayload(start);
+    if (cached) {
+      logRequest("/api/gateway", 200, Date.now() - start, {
+        gateway: cached.status,
+        cached: true,
+      });
+      return NextResponse.json(cached);
+    }
 
-  if (!probe.ok) {
-    logRequest("/api/gateway", 200, Date.now() - start, { gateway: "offline" });
+    const joinedInFlight = gatewayResponseInFlight !== null;
+    if (!gatewayResponseInFlight) {
+      gatewayResponseInFlight = computeGatewayPayload()
+        .then((payload) => {
+          gatewayResponseCache = {
+            payload,
+            expiresAt: Date.now() + GATEWAY_RESPONSE_TTL_MS,
+          };
+          return payload;
+        })
+        .finally(() => {
+          gatewayResponseInFlight = null;
+        });
+    }
+
+    const payload = await gatewayResponseInFlight;
+    logRequest("/api/gateway", 200, Date.now() - start, {
+      gateway: payload.status,
+      coalesced: joinedInFlight,
+    });
+    return NextResponse.json(payload);
+  } catch (err) {
+    logError("/api/gateway", err, { phase: "get" });
     return NextResponse.json({
       status: "offline",
-      health: { ok: false, error: "Gateway HTTP endpoint not reachable" },
+      health: { ok: false, error: "Gateway health check failed" },
     });
   }
-
-  // Gateway is alive — ensure OpenResponses endpoint is enabled for streaming chat
-  ensureResponsesEndpoint();
-
-  // Try to get full health/status data via Gateway RPC.
-  try {
-    const [health, status] = await Promise.all([
-      gatewayCall<Record<string, unknown>>("health", {}, 12000),
-      gatewayCall<Record<string, unknown>>("status", {}, 12000).catch(() => null),
-    ]);
-    const gwStatus = health.ok === true ? "online" : "degraded";
-    logRequest("/api/gateway", 200, Date.now() - start, { gateway: gwStatus });
-    return NextResponse.json({
-      status: gwStatus,
-      health,
-      ...(status ? { gatewayStatus: status } : {}),
-    });
-  } catch {
-    // RPC failed — but gateway IS reachable via HTTP
-  }
-
-  // Gateway is reachable but full health data unavailable — report online
-  logRequest("/api/gateway", 200, Date.now() - start, { gateway: "online", lite: true });
-  return NextResponse.json({
-    status: "online",
-    health: { ok: true, port: probe.port, note: "Lite probe (full health unavailable)" },
-  });
 }
 export async function POST(req: Request) {
   try {

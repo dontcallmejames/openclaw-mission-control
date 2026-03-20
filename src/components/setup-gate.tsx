@@ -1,12 +1,20 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { OnboardingWizard } from "@/components/onboarding-wizard";
+
+const isHosted =
+  process.env.NEXT_PUBLIC_AGENTBAY_HOSTED === "true" ||
+  process.env.AGENTBAY_HOSTED === "true";
+const AUTO_RETRY_SECONDS = 8;
+const POST_COMPLETE_GRACE_MS = 3000;
 
 export function SetupGate({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<{ hasModel: boolean; hasChannel: boolean; hasApiKey: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [retryIn, setRetryIn] = useState(AUTO_RETRY_SECONDS);
+  const completedRef = useRef(false);
 
   const fetchStatus = useCallback(async () => {
     setLoading(true);
@@ -27,8 +35,27 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
     fetchStatus();
   }, [fetchStatus]);
 
+  useEffect(() => {
+    if (!error || !isHosted) return;
+    setRetryIn(AUTO_RETRY_SECONDS);
+    const countdown = setInterval(() => {
+      setRetryIn((prev) => Math.max(prev - 1, 0));
+    }, 1000);
+    const retryTimer = setTimeout(() => {
+      void fetchStatus();
+    }, AUTO_RETRY_SECONDS * 1000);
+    return () => {
+      clearInterval(countdown);
+      clearTimeout(retryTimer);
+    };
+  }, [error, fetchStatus]);
+
   const handleComplete = useCallback(() => {
-    fetchStatus();
+    completedRef.current = true;
+    setTimeout(() => {
+      fetchStatus();
+      setTimeout(() => { completedRef.current = false; }, 2000);
+    }, POST_COMPLETE_GRACE_MS);
   }, [fetchStatus]);
 
   if (loading && !status) {
@@ -47,10 +74,27 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-background px-4">
         <div className="flex max-w-sm flex-col items-center gap-4 text-center">
-          <h2 className="text-sm font-semibold text-foreground">Could not connect to OpenClaw</h2>
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            Make sure the OpenClaw gateway is running and try again.
-          </p>
+          {isHosted ? (
+            <>
+              <h2 className="text-sm font-semibold text-foreground">Your agent is starting up</h2>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                This usually takes a moment. We&apos;ll retry automatically in {retryIn}s.
+              </p>
+              <a
+                href="/help"
+                className="text-xs font-medium text-primary underline underline-offset-4 hover:opacity-90"
+              >
+                Contact support
+              </a>
+            </>
+          ) : (
+            <>
+              <h2 className="text-sm font-semibold text-foreground">Could not connect to OpenClaw</h2>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Make sure the OpenClaw gateway is running and try again.
+              </p>
+            </>
+          )}
           <button
             type="button"
             onClick={fetchStatus}
@@ -63,7 +107,11 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (status && (!status.hasModel || !status.hasChannel || !status.hasApiKey)) {
+  if (completedRef.current) {
+    return <>{children}</>;
+  }
+
+  if (status && (!status.hasModel || !status.hasApiKey)) {
     return <OnboardingWizard onComplete={handleComplete} />;
   }
 

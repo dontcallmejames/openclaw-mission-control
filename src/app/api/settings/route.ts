@@ -100,7 +100,6 @@ export async function POST(request: NextRequest) {
             {
               raw: JSON.stringify(patch),
               baseHash: hash,
-              restartDelayMs: 2000,
             },
             10000,
           );

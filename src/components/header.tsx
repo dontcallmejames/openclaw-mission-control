@@ -70,9 +70,9 @@ function ChatBubble({ msg, timeFormat }: { msg: ChatMessage; timeFormat: TimeFor
   if (msg.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-md rounded-2xl rounded-tr-sm bg-primary/90 text-primary-foreground px-3.5 py-2 text-xs leading-relaxed shadow-sm">
+        <div className="max-w-md rounded-2xl rounded-tr-sm border border-primary/30 bg-primary text-primary-foreground px-3.5 py-2 text-xs leading-relaxed shadow-sm dark:border-violet-400/40 dark:bg-violet-500 dark:text-white">
           <p className="whitespace-pre-wrap break-words">{msg.text}</p>
-          <p className="mt-1 text-right text-xs text-white/40">{formatTime(msg.timestamp, timeFormat)}</p>
+          <p className="mt-1 text-right text-xs text-white/70 dark:text-white/75">{formatTime(msg.timestamp, timeFormat)}</p>
         </div>
       </div>
     );
@@ -564,7 +564,7 @@ function GatewayStatusBadge({
     >
       <div
         className={cn(
-          "flex cursor-default items-center gap-1.5 rounded-full border px-2.5 py-1 transition-colors",
+          "flex cursor-default items-center gap-1 rounded-full border px-2 py-1 text-xs transition-colors",
           cfg.bg
         )}
       >
@@ -694,7 +694,7 @@ export function Header() {
 
   return (
     <>
-      <header className="flex shrink-0 items-center justify-between border-b border-stone-200 bg-stone-50 px-4 py-3 md:px-8 dark:border-[#23282e] dark:bg-[#121519]">
+      <header className="flex shrink-0 items-center justify-between border-b border-stone-200 bg-stone-50 px-4 py-2 text-xs md:px-8 dark:border-[#23282e] dark:bg-[#121519]">
         <div className="flex items-center gap-2 ml-11 md:ml-0">
           <GatewayStatusBadge status={gwStatus} health={gwHealth} latencyMs={gwLatencyMs} />
         </div>
@@ -708,16 +708,16 @@ export function Header() {
             data-chat-toggle
             onClick={() => chatStore.toggle()}
             className={cn(
-              "relative flex h-9 items-center gap-1.5 rounded-md border border-stone-200 bg-white px-3 text-sm font-medium text-stone-600 transition-colors hover:bg-stone-100 hover:text-stone-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-[#2c343d] dark:bg-[#171a1d] dark:text-[#d6dce3] dark:hover:bg-[#20252a] dark:hover:text-[#f5f7fa]",
+              "relative flex h-8 items-center gap-1.5 rounded-md border border-stone-200 bg-white px-2.5 text-xs font-medium text-stone-600 transition-colors hover:bg-stone-100 hover:text-stone-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-[#2c343d] dark:bg-[#171a1d] dark:text-[#d6dce3] dark:hover:bg-[#20252a] dark:hover:text-[#f5f7fa]",
               chat.open
                 ? "border-stone-300 bg-stone-100 text-stone-900 dark:border-[#38414b] dark:bg-[#20252a] dark:text-[#f5f7fa]"
                 : ""
             )}
           >
-            <Zap className="h-3.5 w-3.5" />
+            <Zap className="h-3 w-3" />
             <span className="hidden md:inline">Ping Agent</span>
             {chat.unread > 0 && !chat.open && (
-              <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-stone-900 px-1 text-xs font-bold text-white shadow-lg dark:bg-stone-100 dark:text-stone-900">
+              <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-stone-900 px-0.5 text-xs font-bold leading-none text-white shadow-lg dark:bg-stone-100 dark:text-stone-900">
                 {chat.unread}
               </span>
             )}
@@ -734,11 +734,11 @@ export function Header() {
           <button
             type="button"
             onClick={() => setSearchOpen(true)}
-            className="flex h-9 items-center gap-2 rounded-md border border-stone-200 bg-white px-3 text-sm font-medium text-stone-600 transition-colors hover:bg-stone-100 hover:text-stone-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-[#2c343d] dark:bg-[#171a1d] dark:text-[#d6dce3] dark:hover:bg-[#20252a] dark:hover:text-[#f5f7fa]"
+            className="flex h-8 items-center gap-1.5 rounded-md border border-stone-200 bg-white px-2.5 text-xs font-medium text-stone-600 transition-colors hover:bg-stone-100 hover:text-stone-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-[#2c343d] dark:bg-[#171a1d] dark:text-[#d6dce3] dark:hover:bg-[#20252a] dark:hover:text-[#f5f7fa]"
           >
-            <Search className="h-3.5 w-3.5" />
+            <Search className="h-3 w-3" />
             <span className="hidden sm:inline">Search</span>
-            <kbd className="ml-1 hidden rounded bg-stone-100 px-1.5 py-0.5 text-xs text-stone-400 sm:inline dark:bg-stone-700 dark:text-stone-500">
+            <kbd className="ml-1 hidden rounded bg-stone-100 px-1 py-0.5 text-xs text-stone-400 sm:inline dark:bg-stone-700 dark:text-stone-500">
               ⌘K
             </kbd>
           </button>
@@ -760,7 +760,7 @@ export function Header() {
               }}
               disabled={powerBusy}
               className={cn(
-                "flex h-9 items-center gap-1.5 rounded-md px-3 text-sm font-medium transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 isAlive
                   ? "border border-red-300 bg-red-500 text-white hover:bg-red-600"
                   : "border border-emerald-300 bg-emerald-500 text-white hover:bg-emerald-600"
@@ -773,11 +773,11 @@ export function Header() {
                   <span className="h-1 w-1 animate-bounce rounded-full bg-current [animation-delay:300ms]" />
                 </span>
               ) : (
-                <Power className="h-3.5 w-3.5" />
+                <Power className="h-3 w-3" />
               )}
               <span className="hidden sm:inline">{isAlive ? "Kill" : "Start"}</span>
             </button>
-            <div className="pointer-events-none absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-popover px-2.5 py-1.5 text-xs text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+            <div className="pointer-events-none absolute left-1/2 top-full mt-1.5 -translate-x-1/2 whitespace-nowrap rounded border border-border bg-popover px-2 py-1 text-xs text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
               {isAlive ? "Emergency stop — kill the gateway" : "Start the gateway"}
             </div>
           </div>

@@ -4,6 +4,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { runCli, gatewayCall } from "@/lib/openclaw";
 import { invokeGatewayTool } from "@/lib/gateway-tools";
+import { patchConfig } from "@/lib/gateway-config";
 
 export const dynamic = "force-dynamic";
 
@@ -281,6 +282,8 @@ const VALID_MODELS = new Set([
   "perplexity/sonar-reasoning-pro",
 ]);
 
+const VALID_PROVIDERS = new Set(["brave", "perplexity"]);
+
 /**
  * PATCH: update search model.
  *
@@ -289,7 +292,63 @@ const VALID_MODELS = new Set([
  */
 export async function PATCH(request: NextRequest) {
   try {
-    const body = (await request.json()) as { model?: string };
+    const body = (await request.json()) as {
+      model?: string;
+      action?: string;
+      provider?: string;
+      apiKey?: string;
+      makeDefault?: boolean;
+    };
+
+    // Read existing search config from disk so updates are additive and safe.
+    const mainConfig = await readJsonSafe<Record<string, unknown>>(join(OPENCLAW_DIR, "openclaw.json"), {});
+    const existingSearch = (dig(mainConfig, "tools", "web", "search") || {}) as Record<string, unknown>;
+
+    const action = String(body.action || "").trim();
+    if (action === "set-provider") {
+      const provider = String(body.provider || "").trim().toLowerCase();
+      if (!VALID_PROVIDERS.has(provider)) {
+        return NextResponse.json(
+          { ok: false, error: `Invalid provider. Valid: ${[...VALID_PROVIDERS].join(", ")}` },
+          { status: 400 }
+        );
+      }
+      await patchConfig({
+        tools: {
+          web: {
+            search: {
+              ...existingSearch,
+              provider,
+            },
+          },
+        },
+      });
+      return NextResponse.json({ ok: true, provider });
+    }
+
+    if (action === "set-brave") {
+      const apiKey = String(body.apiKey || "").trim();
+      if (apiKey.length < 12) {
+        return NextResponse.json(
+          { ok: false, error: "Brave API key looks too short." },
+          { status: 400 }
+        );
+      }
+      const makeDefault = body.makeDefault !== false;
+      await patchConfig({
+        tools: {
+          web: {
+            search: {
+              ...existingSearch,
+              apiKey,
+              provider: makeDefault ? "brave" : String(existingSearch.provider || ""),
+            },
+          },
+        },
+      });
+      return NextResponse.json({ ok: true, provider: makeDefault ? "brave" : existingSearch.provider || "none" });
+    }
+
     const model = String(body.model || "").trim();
     if (!model || !VALID_MODELS.has(model)) {
       return NextResponse.json(
@@ -298,23 +357,18 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    // Read current config to get hash AND preserve existing perplexity keys
-    const config = await gatewayCall<ConfigGet>("config.get", undefined, 10000);
-    const hash = String(config?.hash || "");
-
-    // Read the existing perplexity block from disk to preserve apiKey etc.
-    const mainConfig = await readJsonSafe<Record<string, unknown>>(join(OPENCLAW_DIR, "openclaw.json"), {});
-    const existingPplx = (dig(mainConfig, "tools", "web", "search", "perplexity") || {}) as Record<string, unknown>;
-
-    // Merge model into existing perplexity config (preserves apiKey, baseUrl, etc.)
+    const existingPplx = (dig(existingSearch, "perplexity") || {}) as Record<string, unknown>;
     const mergedPplx = { ...existingPplx, model };
-    const patch = { tools: { web: { search: { perplexity: mergedPplx } } } };
-
-    await gatewayCall(
-      "config.patch",
-      { raw: JSON.stringify(patch), baseHash: hash },
-      15000
-    );
+    await patchConfig({
+      tools: {
+        web: {
+          search: {
+            ...existingSearch,
+            perplexity: mergedPplx,
+          },
+        },
+      },
+    });
 
     return NextResponse.json({ ok: true, model });
   } catch (err) {

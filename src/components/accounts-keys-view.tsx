@@ -233,6 +233,16 @@ type AuditData = {
   findings: AuditFinding[];
 };
 
+type SecretsActionResponse = {
+  ok?: boolean;
+  error?: string;
+  stderr?: string;
+  raw?: string;
+  code?: number | null;
+  requiresInteractiveTty?: boolean;
+  recommendedCommand?: string;
+};
+
 const SEVERITY_STYLES: Record<string, { bg: string; text: string; border: string; icon: React.ReactNode }> = {
   warn: {
     bg: "bg-amber-500/10",
@@ -288,6 +298,7 @@ function SecretsPanel() {
   const [findingsExpanded, setFindingsExpanded] = useState(false);
   const [configuring, setConfiguring] = useState(false);
   const [configResult, setConfigResult] = useState<string | null>(null);
+  const [configureCommand, setConfigureCommand] = useState<string | null>(null);
   const [reloading, setReloading] = useState(false);
   const [reloadResult, setReloadResult] = useState<string | null>(null);
 
@@ -320,9 +331,15 @@ function SecretsPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "configure", ...opts }),
       });
-      const data = await res.json();
-      if (data.error && !data.ok) throw new Error(data.error);
-      setConfigResult(data.ok ? "Configuration applied successfully." : data.raw || data.stderr || "Done.");
+      const data = (await res.json()) as SecretsActionResponse;
+      if (!res.ok || data.ok === false || data.error) {
+        if (data.requiresInteractiveTty) {
+          setConfigureCommand(data.recommendedCommand || "openclaw secrets configure --apply");
+        }
+        throw new Error(data.error || data.stderr || data.raw || `HTTP ${res.status}`);
+      }
+      setConfigureCommand(null);
+      setConfigResult("Configuration applied successfully.");
       // Re-run audit to refresh findings
       await runAudit();
     } catch (err) {
@@ -342,8 +359,10 @@ function SecretsPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "reload" }),
       });
-      const data = await res.json();
-      if (data.error && !data.ok) throw new Error(data.error);
+      const data = (await res.json()) as SecretsActionResponse;
+      if (!res.ok || data.ok === false || data.error) {
+        throw new Error(data.error || data.stderr || data.raw || `HTTP ${res.status}`);
+      }
       setReloadResult("Secrets reloaded successfully. Runtime snapshot updated.");
       await runAudit();
     } catch (err) {
@@ -358,6 +377,7 @@ function SecretsPanel() {
   const errorCount = audit?.findings.filter((f) => f.severity === "error").length ?? 0;
   const infoCount = audit?.findings.filter((f) => f.severity === "info").length ?? 0;
   const isClean = totalFindings === 0 && audit?.status === "clean";
+  const configureBlockedByTty = Boolean(configureCommand);
 
   return (
     <div className="rounded-xl border border-border/70 bg-card">
@@ -404,6 +424,15 @@ function SecretsPanel() {
             <div className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-400">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
               {error}
+            </div>
+          )}
+          {configureCommand && (
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-300">
+              <p className="leading-relaxed">
+                Configure requires an interactive terminal in this environment. Run:
+                {" "}
+                <code className="text-amber-200">{configureCommand}</code>
+              </p>
             </div>
           )}
 
@@ -542,9 +571,9 @@ function SecretsPanel() {
             <button
               type="button"
               onClick={() => void handleConfigure({ apply: true })}
-              disabled={configuring || loading}
+              disabled={configuring || loading || configureBlockedByTty}
               className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-40"
-              title="Run secrets configure --apply: auto-map plaintext secrets to SecretRefs"
+              title={configureBlockedByTty ? "Run this command in Terminal instead" : "Run secrets configure --apply: auto-map plaintext secrets to SecretRefs"}
             >
               {configuring ? <InlineSpinner size="sm" /> : <Wrench className="h-3 w-3" />}
               Auto-configure & Apply
@@ -552,9 +581,9 @@ function SecretsPanel() {
             <button
               type="button"
               onClick={() => void handleConfigure({ providersOnly: true, apply: true })}
-              disabled={configuring || loading}
+              disabled={configuring || loading || configureBlockedByTty}
               className="inline-flex items-center gap-1.5 rounded-lg border border-foreground/10 bg-foreground/5 px-3 py-2 text-xs font-medium text-foreground/70 transition-colors hover:bg-foreground/10 disabled:opacity-40"
-              title="Configure providers only without mapping credentials"
+              title={configureBlockedByTty ? "Run this command in Terminal instead" : "Configure providers only without mapping credentials"}
             >
               {configuring ? <InlineSpinner size="sm" /> : <Shield className="h-3 w-3" />}
               Providers Only

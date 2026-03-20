@@ -27,6 +27,16 @@ type SubagentsDefaults = {
   thinking: string;
 };
 
+type ThreadBindingsSettings = {
+  enabled: boolean;
+  idleHours: number;
+  maxAgeHours: number;
+  discordEnabled: boolean;
+  discordIdleHours: number;
+  discordMaxAgeHours: number;
+  spawnSubagentSessions: boolean;
+};
+
 type SubagentsAction =
   | "list"
   | "spawn"
@@ -130,6 +140,15 @@ export function SubagentsManagerView({
     runTimeoutSeconds: 600,
     model: "",
     thinking: "minimal",
+  });
+  const [threadBindings, setThreadBindings] = useState<ThreadBindingsSettings>({
+    enabled: false,
+    idleHours: 24,
+    maxAgeHours: 168,
+    discordEnabled: false,
+    discordIdleHours: 24,
+    discordMaxAgeHours: 168,
+    spawnSubagentSessions: false,
   });
 
   const [activeAgentId, setActiveAgentId] = useState<string>("main");
@@ -243,6 +262,11 @@ export function SubagentsManagerView({
       const agentsCfg = asRecord(raw.agents);
       const defaultsCfg = asRecord(agentsCfg.defaults);
       const subagentsCfg = asRecord(defaultsCfg.subagents);
+      const sessionCfg = asRecord(raw.session);
+      const sessionThreadCfg = asRecord(sessionCfg.threadBindings);
+      const channelsCfg = asRecord(raw.channels);
+      const discordCfg = asRecord(channelsCfg.discord);
+      const discordThreadCfg = asRecord(discordCfg.threadBindings);
 
       setDefaults({
         maxSpawnDepth: readNumber(subagentsCfg.maxSpawnDepth, 2),
@@ -252,6 +276,15 @@ export function SubagentsManagerView({
         runTimeoutSeconds: readNumber(subagentsCfg.runTimeoutSeconds, 600),
         model: readString(subagentsCfg.model, ""),
         thinking: readString(subagentsCfg.thinking, "minimal"),
+      });
+      setThreadBindings({
+        enabled: Boolean(sessionThreadCfg.enabled),
+        idleHours: readNumber(sessionThreadCfg.idleHours, 24),
+        maxAgeHours: readNumber(sessionThreadCfg.maxAgeHours, 168),
+        discordEnabled: Boolean(discordThreadCfg.enabled),
+        discordIdleHours: readNumber(discordThreadCfg.idleHours, 24),
+        discordMaxAgeHours: readNumber(discordThreadCfg.maxAgeHours, 168),
+        spawnSubagentSessions: Boolean(discordThreadCfg.spawnSubagentSessions),
       });
       setBaseHash(String(data?.baseHash || ""));
     } catch (err) {
@@ -422,6 +455,49 @@ export function SubagentsManagerView({
       setSaving(false);
     }
   }, [baseHash, defaults, loadDefaults]);
+
+  const saveThreadBindings = useCallback(async () => {
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          baseHash,
+          patch: {
+            session: {
+              threadBindings: {
+                enabled: threadBindings.enabled,
+                idleHours: threadBindings.idleHours,
+                maxAgeHours: threadBindings.maxAgeHours,
+              },
+            },
+            channels: {
+              discord: {
+                threadBindings: {
+                  enabled: threadBindings.discordEnabled,
+                  idleHours: threadBindings.discordIdleHours,
+                  maxAgeHours: threadBindings.discordMaxAgeHours,
+                  spawnSubagentSessions: threadBindings.spawnSubagentSessions,
+                },
+              },
+            },
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(String(data?.error || `HTTP ${res.status}`));
+      setNotice("Thread binding settings saved.");
+      requestRestart("Thread binding settings were updated.");
+      await loadDefaults();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }, [baseHash, loadDefaults, threadBindings]);
 
   const saveAgentAllowList = useCallback(async () => {
     if (!editingAgentId) return;
@@ -598,6 +674,120 @@ export function SubagentsManagerView({
               Save allowAgents
             </button>
           </div>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-border/70 bg-card p-4 space-y-3">
+        <div className="flex items-center gap-2 font-medium text-foreground">
+          <Network className="h-4 w-4" /> Thread Bindings (Discord)
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Controls thread-bound subagent/session routing for Discord as documented in OpenClaw.
+        </p>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={threadBindings.enabled}
+              onChange={(e) =>
+                setThreadBindings((prev) => ({ ...prev, enabled: e.target.checked }))
+              }
+            />
+            Global thread bindings enabled
+          </label>
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={threadBindings.discordEnabled}
+              onChange={(e) =>
+                setThreadBindings((prev) => ({ ...prev, discordEnabled: e.target.checked }))
+              }
+            />
+            Discord override enabled
+          </label>
+          <label>
+            <span className="text-xs text-muted-foreground">Global idle hours</span>
+            <input
+              type="number"
+              min={1}
+              className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+              value={threadBindings.idleHours}
+              onChange={(e) =>
+                setThreadBindings((prev) => ({
+                  ...prev,
+                  idleHours: Number(e.target.value || 24),
+                }))
+              }
+            />
+          </label>
+          <label>
+            <span className="text-xs text-muted-foreground">Global max age hours</span>
+            <input
+              type="number"
+              min={1}
+              className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+              value={threadBindings.maxAgeHours}
+              onChange={(e) =>
+                setThreadBindings((prev) => ({
+                  ...prev,
+                  maxAgeHours: Number(e.target.value || 168),
+                }))
+              }
+            />
+          </label>
+          <label>
+            <span className="text-xs text-muted-foreground">Discord idle hours</span>
+            <input
+              type="number"
+              min={1}
+              className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+              value={threadBindings.discordIdleHours}
+              onChange={(e) =>
+                setThreadBindings((prev) => ({
+                  ...prev,
+                  discordIdleHours: Number(e.target.value || 24),
+                }))
+              }
+            />
+          </label>
+          <label>
+            <span className="text-xs text-muted-foreground">Discord max age hours</span>
+            <input
+              type="number"
+              min={1}
+              className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+              value={threadBindings.discordMaxAgeHours}
+              onChange={(e) =>
+                setThreadBindings((prev) => ({
+                  ...prev,
+                  discordMaxAgeHours: Number(e.target.value || 168),
+                }))
+              }
+            />
+          </label>
+          <label className="inline-flex items-center gap-2 text-sm md:col-span-2">
+            <input
+              type="checkbox"
+              checked={threadBindings.spawnSubagentSessions}
+              onChange={(e) =>
+                setThreadBindings((prev) => ({
+                  ...prev,
+                  spawnSubagentSessions: e.target.checked,
+                }))
+              }
+            />
+            Auto-bind spawned subagent sessions to Discord threads
+          </label>
+        </div>
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => void saveThreadBindings()}
+            disabled={loading || saving || !baseHash}
+            className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50"
+          >
+            Save Thread Bindings
+          </button>
         </div>
       </div>
 

@@ -67,6 +67,8 @@ function ProviderCard({
   keyPreview,
   isActive,
   envKey,
+  onActivate,
+  activating,
 }: {
   name: string;
   icon: React.ReactNode;
@@ -76,6 +78,8 @@ function ProviderCard({
   keyPreview: string | null;
   isActive: boolean;
   envKey: string;
+  onActivate?: () => void;
+  activating?: boolean;
 }) {
   return (
     <div
@@ -127,6 +131,25 @@ function ProviderCard({
           </p>
         )}
       </div>
+      {configured && !isActive && onActivate && (
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={onActivate}
+            disabled={Boolean(activating)}
+            className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-foreground/5 px-2.5 py-1.5 text-xs text-foreground/80 transition-colors hover:bg-foreground/10 disabled:opacity-60"
+          >
+            {activating ? (
+              <span className="inline-flex items-center gap-0.5">
+                <span className="h-1 w-1 animate-bounce rounded-full bg-current [animation-delay:0ms]" />
+                <span className="h-1 w-1 animate-bounce rounded-full bg-current [animation-delay:150ms]" />
+                <span className="h-1 w-1 animate-bounce rounded-full bg-current [animation-delay:300ms]" />
+              </span>
+            ) : null}
+            Make active
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -341,7 +364,7 @@ function SearchPlayground({
             <span>agent: {result.agentId}</span>
             <span>duration: {(result.durationMs / 1000).toFixed(1)}s</span>
           </div>
-          <pre className="max-h-96 overflow-auto rounded-lg border border-foreground/10 bg-zinc-950 p-3 text-xs leading-relaxed text-cyan-100 whitespace-pre-wrap break-words">
+          <pre className="max-h-96 overflow-auto rounded-lg border border-foreground/10 bg-zinc-950 p-3 text-xs leading-relaxed text-cyan-100 whitespace-pre-wrap wrap-break-word">
             {result.output || "(no output)"}
           </pre>
         </div>
@@ -357,6 +380,10 @@ export function WebSearchView() {
   const [status, setStatus] = useState<SearchStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [switchingModel, setSwitchingModel] = useState(false);
+  const [savingProvider, setSavingProvider] = useState(false);
+  const [savingBraveKey, setSavingBraveKey] = useState(false);
+  const [braveApiKeyDraft, setBraveApiKeyDraft] = useState("");
+  const [configMessage, setConfigMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -395,6 +422,71 @@ export function WebSearchView() {
       setSwitchingModel(false);
     }
   }, [load]);
+
+  const setProvider = useCallback(
+    async (provider: "brave" | "perplexity") => {
+      setSavingProvider(true);
+      setError(null);
+      setConfigMessage(null);
+      try {
+        const res = await fetch("/api/web-search", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "set-provider", provider }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data?.ok) throw new Error(data?.error || "Failed to set provider");
+        setConfigMessage({
+          type: "success",
+          text: `Active provider set to ${provider === "brave" ? "Brave" : "Perplexity"}.`,
+        });
+        await load();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(msg);
+        setConfigMessage({ type: "error", text: msg });
+      } finally {
+        setSavingProvider(false);
+      }
+    },
+    [load]
+  );
+
+  const saveBraveKey = useCallback(async () => {
+    const apiKey = braveApiKeyDraft.trim();
+    if (!apiKey) {
+      setConfigMessage({ type: "error", text: "Please paste a Brave API key first." });
+      return;
+    }
+    setSavingBraveKey(true);
+    setError(null);
+    setConfigMessage(null);
+    try {
+      const res = await fetch("/api/web-search", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "set-brave",
+          apiKey,
+          makeDefault: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok) throw new Error(data?.error || "Failed to save Brave API key");
+      setBraveApiKeyDraft("");
+      setConfigMessage({
+        type: "success",
+        text: "Brave key saved and Brave is now the active web search provider.",
+      });
+      await load();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      setConfigMessage({ type: "error", text: msg });
+    } finally {
+      setSavingBraveKey(false);
+    }
+  }, [braveApiKeyDraft, load]);
 
   const activeModel = useMemo(() => {
     if (!status) return null;
@@ -489,6 +581,14 @@ export function WebSearchView() {
                   keyPreview={status.providers.perplexity.keyPreview}
                   isActive={status.activeProvider === "perplexity" && status.providers.perplexity.configured}
                   envKey="PERPLEXITY_API_KEY"
+                  onActivate={
+                    status.providers.perplexity.configured
+                      ? () => {
+                          void setProvider("perplexity");
+                        }
+                      : undefined
+                  }
+                  activating={savingProvider}
                 />
                 <ProviderCard
                   name="OpenRouter"
@@ -509,9 +609,57 @@ export function WebSearchView() {
                   keyPreview={status.providers.brave.keyPreview}
                   isActive={status.activeProvider === "brave"}
                   envKey="BRAVE_API_KEY"
+                  onActivate={
+                    status.providers.brave.configured
+                      ? () => {
+                          void setProvider("brave");
+                        }
+                      : undefined
+                  }
+                  activating={savingProvider}
                 />
               </div>
             </div>
+
+            <div className="rounded-xl border border-foreground/10 bg-foreground/5 p-4 space-y-2">
+              <h3 className="text-xs font-semibold text-foreground/80">Quick setup: Brave (recommended fallback)</h3>
+              <p className="text-xs text-muted-foreground">
+                Paste a Brave API key to save it in <code className="text-xs">openclaw.json</code> and make Brave the default search provider.
+              </p>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <input
+                  type="password"
+                  value={braveApiKeyDraft}
+                  onChange={(e) => setBraveApiKeyDraft(e.target.value)}
+                  placeholder="BSA... (Brave API key)"
+                  disabled={savingBraveKey || loading}
+                  className="min-w-0 flex-1 rounded-lg border border-foreground/10 bg-foreground/5 px-3 py-2 text-xs text-foreground/90 outline-none transition-colors focus:border-cyan-500/40 disabled:opacity-60"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    void saveBraveKey();
+                  }}
+                  disabled={savingBraveKey || loading}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-orange-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-orange-500 disabled:opacity-60"
+                >
+                  {savingBraveKey ? "Saving..." : "Save key + Use Brave"}
+                </button>
+              </div>
+            </div>
+
+            {configMessage && (
+              <div
+                className={cn(
+                  "rounded-xl border p-3 text-xs",
+                  configMessage.type === "success"
+                    ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+                    : "border-red-500/20 bg-red-500/10 text-red-300"
+                )}
+              >
+                {configMessage.text}
+              </div>
+            )}
 
             {/* Model selector (perplexity only) */}
             {status.activeProvider === "perplexity" && (

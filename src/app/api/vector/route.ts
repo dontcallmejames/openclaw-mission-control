@@ -1,14 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readdir, stat, unlink } from "fs/promises";
-import { dirname, resolve } from "path";
-import { execFile } from "child_process";
-import { promisify } from "util";
+import { readdir, readFile, stat, unlink, writeFile } from "fs/promises";
+import { dirname, extname, join, relative, resolve, sep } from "path";
 import { runCliJson, gatewayCall } from "@/lib/openclaw";
-import { getOpenClawHome, getDefaultWorkspace, getOpenClawBin } from "@/lib/paths";
+import { getOpenClawHome, getDefaultWorkspace } from "@/lib/paths";
 import { buildModelsSummary } from "@/lib/models-summary";
-import { gatewayMemorySearch, gatewayMemoryIndex } from "@/lib/gateway-tools";
-
-const exec = promisify(execFile);
+import { gatewayMemoryIndex } from "@/lib/gateway-tools";
 
 export const dynamic = "force-dynamic";
 
@@ -118,6 +114,119 @@ async function getWorkspaceReferencePaths(): Promise<string[]> {
   }
 }
 
+const INDEXABLE_FILE_EXTENSIONS = new Set([".md", ".mdx", ".txt"]);
+const INDEX_SCAN_SKIP_DIRS = new Set([
+  ".git",
+  ".next",
+  "node_modules",
+  "dist",
+  "build",
+]);
+const MAX_INDEXABLE_DOCS = 2000;
+
+type VectorDocEntry = {
+  path: string;
+  selected: boolean;
+  source: "workspace" | "custom";
+};
+
+function normalizePathForConfig(input: string): string {
+  return input.trim().replace(/\\/g, "/").replace(/^\.\/+/, "");
+}
+
+async function getResolvedMemorySearchConfig(): Promise<{
+  hash: string;
+  memorySearch: Record<string, unknown>;
+}> {
+  const configData = await gatewayCall<Record<string, unknown>>(
+    "config.get",
+    undefined,
+    10000
+  );
+  const hash = String(configData.hash || "");
+  const resolved = (configData.resolved || {}) as Record<string, unknown>;
+  const agentsConfig = (resolved.agents || {}) as Record<string, unknown>;
+  const defaults = (agentsConfig.defaults || {}) as Record<string, unknown>;
+  const currentMemorySearch = (defaults.memorySearch || {}) as Record<string, unknown>;
+  return { hash, memorySearch: currentMemorySearch };
+}
+
+async function patchMemorySearchConfig(
+  baseHash: string,
+  memorySearch: Record<string, unknown>,
+  restartDelayMs?: number,
+): Promise<void> {
+  const patchRaw = JSON.stringify({
+    agents: {
+      defaults: {
+        memorySearch,
+      },
+    },
+  });
+  await gatewayCall(
+    "config.patch",
+    {
+      raw: patchRaw,
+      baseHash,
+      ...(typeof restartDelayMs === "number" ? { restartDelayMs } : {}),
+    },
+    15000
+  );
+}
+
+async function listWorkspaceIndexableDocs(workspaceDir: string): Promise<string[]> {
+  const workspaceRoot = resolve(workspaceDir);
+  const out: string[] = [];
+  const visited = new Set<string>();
+
+  async function walk(current: string, depth: number): Promise<void> {
+    if (out.length >= MAX_INDEXABLE_DOCS) return;
+    if (depth > 8) return;
+
+    let entries;
+    try {
+      entries = await readdir(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (out.length >= MAX_INDEXABLE_DOCS) return;
+      const fullPath = resolve(current, entry.name);
+      if (visited.has(fullPath)) continue;
+      visited.add(fullPath);
+
+      if (entry.isDirectory()) {
+        if (entry.name === "memory") continue; // indexed by default source
+        if (INDEX_SCAN_SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
+        await walk(fullPath, depth + 1);
+        continue;
+      }
+
+      if (!entry.isFile()) continue;
+      if (entry.name.toUpperCase() === "MEMORY.MD") continue; // indexed by default source
+      const ext = extname(entry.name).toLowerCase();
+      if (!INDEXABLE_FILE_EXTENSIONS.has(ext)) continue;
+
+      const rel = relative(workspaceRoot, fullPath).split(sep).join("/");
+      if (!rel || rel.startsWith("..")) continue;
+      out.push(rel);
+    }
+  }
+
+  await walk(workspaceRoot, 0);
+  out.sort((a, b) => a.localeCompare(b));
+  return out;
+}
+
+function sanitizeExtraPaths(rawPaths: unknown): string[] {
+  if (!Array.isArray(rawPaths)) return [];
+  const normalized = rawPaths
+    .map((value) => normalizePathForConfig(String(value || "")))
+    .filter(Boolean);
+  return [...new Set(normalized)];
+}
+
 /* ── GET: status + search ─────────────────────────── */
 
 export async function GET(request: NextRequest) {
@@ -189,7 +298,40 @@ export async function GET(request: NextRequest) {
         configHash,
         authProviders,
         home: getOpenClawHome(),
+        defaultWorkspace: await getDefaultWorkspace(),
         warning: agentsWarning || undefined,
+      });
+    }
+
+    if (scope === "documents") {
+      const workspaceDir = await getDefaultWorkspace();
+      const docs = await listWorkspaceIndexableDocs(workspaceDir);
+      let selectedExtraPaths: string[] = [];
+      try {
+        const { memorySearch } = await getResolvedMemorySearchConfig();
+        selectedExtraPaths = sanitizeExtraPaths(memorySearch.extraPaths);
+      } catch {
+        // config may not exist yet
+      }
+
+      const selectedSet = new Set(selectedExtraPaths);
+      const entries: VectorDocEntry[] = docs.map((path) => ({
+        path,
+        selected: selectedSet.has(path),
+        source: "workspace",
+      }));
+
+      // Keep already-configured extra paths visible even if they are outside workspace scan.
+      for (const path of selectedExtraPaths) {
+        if (docs.includes(path)) continue;
+        entries.push({ path, selected: true, source: "custom" });
+      }
+
+      entries.sort((a, b) => a.path.localeCompare(b.path));
+      return NextResponse.json({
+        workspaceDir,
+        docs: entries,
+        selectedExtraPaths,
       });
     }
 
@@ -203,30 +345,19 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ results: [], query });
       }
 
-      // Try gateway tool first; fall back to CLI if the tool isn't registered
-      let data: { results: SearchResult[] };
-      try {
-        data = await gatewayMemorySearch({
-          query: query.trim(),
-          agent: agent || undefined,
-          maxResults: parseInt(maxResults, 10) || 10,
-          minScore: minScore || undefined,
-        });
-      } catch (gwErr) {
-        const is404 = gwErr instanceof Error && gwErr.message.includes("(404)");
-        if (!is404) throw gwErr;
-
-        const bin = await getOpenClawBin();
-        const args = ["memory", "search", query.trim(), "--json", "--max-results", String(parseInt(maxResults, 10) || 10)];
-        if (agent) args.push("--agent", agent);
-        if (minScore) args.push("--min-score", minScore);
-        const { stdout } = await exec(bin, args, {
-          timeout: 30000,
-          env: { ...process.env, NO_COLOR: "1" },
-        });
-        const parsed = JSON.parse(stdout || "{}") as { results?: SearchResult[] };
-        data = { results: Array.isArray(parsed.results) ? parsed.results : [] };
-      }
+      const args = [
+        "memory",
+        "search",
+        "--query",
+        query.trim(),
+        "--json",
+        "--max-results",
+        String(parseInt(maxResults, 10) || 10),
+      ];
+      if (agent) args.push("--agent", agent);
+      if (minScore) args.push("--min-score", minScore);
+      const parsed = await runCliJson<{ results?: SearchResult[] }>(args, 30000);
+      const data = { results: Array.isArray(parsed.results) ? parsed.results : [] };
 
       const results = (data.results || []).map((r) => ({
         ...r,
@@ -254,32 +385,10 @@ export async function POST(request: NextRequest) {
       case "reindex": {
         const agent = body.agent as string | undefined;
         const force = body.force as boolean | undefined;
-
-        // Try gateway tool first; fall back to CLI if the tool isn't registered
-        // (memory_index is a CLI-only operation in most gateway versions — see #25).
-        let output: string;
-        try {
-          output = await gatewayMemoryIndex({
-            agent: agent || undefined,
-            force: force || undefined,
-          });
-        } catch (gwErr) {
-          const is404 = gwErr instanceof Error && gwErr.message.includes("(404)");
-          if (!is404) throw gwErr;
-
-          const bin = await getOpenClawBin();
-          // `openclaw memory index` supports --agent and --verbose only (no --force).
-          // For force-reindex, use `memory status --deep --index` which reindexes dirty stores.
-          const args = force
-            ? ["memory", "status", "--deep", "--index"]
-            : ["memory", "index"];
-          if (agent) args.push("--agent", agent);
-          const { stdout } = await exec(bin, args, {
-            timeout: 60000,
-            env: { ...process.env, NO_COLOR: "1" },
-          });
-          output = stdout || "Reindex completed via CLI";
-        }
+        const output = await gatewayMemoryIndex({
+          agent: agent || undefined,
+          force: force || undefined,
+        });
 
         return NextResponse.json({ ok: true, action, output });
       }
@@ -378,7 +487,7 @@ export async function POST(request: NextRequest) {
 
         await gatewayCall(
           "config.patch",
-          { raw: setupPatch, baseHash: setupHash, restartDelayMs: 2000 },
+          { raw: setupPatch, baseHash: setupHash },
           15000
         );
 
@@ -407,16 +516,7 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        const configData = await gatewayCall<Record<string, unknown>>(
-          "config.get",
-          undefined,
-          10000
-        );
-        const hash = configData.hash as string;
-        const resolved = (configData.resolved || {}) as Record<string, unknown>;
-        const agentsConfig = (resolved.agents || {}) as Record<string, unknown>;
-        const defaults = (agentsConfig.defaults || {}) as Record<string, unknown>;
-        const currentMemorySearch = (defaults.memorySearch || {}) as Record<string, unknown>;
+        const { hash, memorySearch: currentMemorySearch } = await getResolvedMemorySearchConfig();
 
         const memorySearch: Record<string, unknown> = {
           ...currentMemorySearch,
@@ -447,34 +547,78 @@ export async function POST(request: NextRequest) {
           memorySearch.extraPaths = mergedExtra;
         }
 
-        const patchRaw = JSON.stringify({
-          agents: {
-            defaults: {
-              memorySearch,
-            },
-          },
-        });
-
-        await gatewayCall(
-          "config.patch",
-          { raw: patchRaw, baseHash: hash },
-          15000
-        );
+        await patchMemorySearchConfig(hash, memorySearch);
 
         return NextResponse.json({ ok: true, action, provider, model });
       }
 
+      case "set-extra-paths": {
+        const inputPaths = sanitizeExtraPaths(body.extraPaths);
+        const workspaceDir = await getDefaultWorkspace();
+        const workspaceRoot = resolve(workspaceDir);
+        const normalizedExtra: string[] = [];
+        const skippedPaths: string[] = [];
+
+        for (const p of inputPaths) {
+          const isAbsolute = p.startsWith("/") || /^[A-Za-z]:\//.test(p);
+          const resolvedPath = isAbsolute ? resolve(p) : resolve(workspaceRoot, p);
+
+          try {
+            const fileStat = await stat(resolvedPath);
+            if (fileStat.isFile()) {
+              const ext = extname(resolvedPath).toLowerCase();
+              if (!INDEXABLE_FILE_EXTENSIONS.has(ext)) {
+                skippedPaths.push(p);
+                continue;
+              }
+            } else if (!fileStat.isDirectory()) {
+              skippedPaths.push(p);
+              continue;
+            }
+          } catch {
+            skippedPaths.push(p);
+            continue;
+          }
+
+          normalizedExtra.push(isAbsolute ? resolvedPath : p);
+        }
+
+        const { hash, memorySearch: currentMemorySearch } = await getResolvedMemorySearchConfig();
+        const nextMemorySearch: Record<string, unknown> = {
+          ...currentMemorySearch,
+          enabled: currentMemorySearch.enabled ?? true,
+          sources: currentMemorySearch.sources ?? ["memory"],
+        };
+
+        if (normalizedExtra.length > 0) {
+          nextMemorySearch.extraPaths = normalizedExtra;
+        } else {
+          delete nextMemorySearch.extraPaths;
+        }
+
+        await patchMemorySearchConfig(hash, nextMemorySearch);
+
+        let reindexWarning: string | undefined;
+        if (body.reindex !== false) {
+          try {
+            await gatewayMemoryIndex({ force: true });
+          } catch (err) {
+            reindexWarning = err instanceof Error ? err.message : String(err);
+          }
+        }
+
+        return NextResponse.json({
+          ok: true,
+          action,
+          extraPaths: normalizedExtra,
+          ...(reindexWarning ? { warning: `Reindex skipped: ${reindexWarning}` } : {}),
+          ...(skippedPaths.length > 0 ? { skippedPaths } : {}),
+        });
+      }
+
       case "ensure-extra-paths": {
         // Merge all root-level .md workspace files into memorySearch.extraPaths and reindex
-        const configData = await gatewayCall<Record<string, unknown>>(
-          "config.get",
-          undefined,
-          10000
-        );
-        const hash = configData.hash as string;
-        const resolved = (configData.resolved || {}) as Record<string, unknown>;
-        const defaults = (resolved.agents as Record<string, unknown>)?.defaults as Record<string, unknown> | undefined;
-        const currentMemorySearch = (defaults?.memorySearch || {}) as Record<string, unknown>;
+        const { hash, memorySearch: currentMemorySearch } = await getResolvedMemorySearchConfig();
         const existingExtra = (currentMemorySearch.extraPaths as string[] | undefined) ?? [];
         const referencePaths = await getWorkspaceReferencePaths();
         const mergedExtra = [...new Set([...existingExtra, ...referencePaths])];
@@ -485,18 +629,30 @@ export async function POST(request: NextRequest) {
           ...currentMemorySearch,
           extraPaths: mergedExtra,
         };
-        const patchRaw = JSON.stringify({
-          agents: {
-            defaults: {
-              memorySearch,
-            },
-          },
-        });
-        await gatewayCall(
-          "config.patch",
-          { raw: patchRaw, baseHash: hash, restartDelayMs: 2000 },
-          15000
-        );
+        await patchMemorySearchConfig(hash, memorySearch);
+
+        // Also persist extraPaths to disk — gateway config.patch doesn't reliably
+        // write extraPaths to openclaw.json, so CLI indexing would see stale config.
+        try {
+          const home = getOpenClawHome();
+          const configPath = join(home, "openclaw.json");
+          let diskConfig: Record<string, unknown> = {};
+          try {
+            const raw = await readFile(configPath, "utf-8");
+            diskConfig = JSON.parse(raw) as Record<string, unknown>;
+          } catch { /* fresh */ }
+          const diskAgents = (diskConfig.agents || {}) as Record<string, unknown>;
+          const diskDefaults = (diskAgents.defaults || {}) as Record<string, unknown>;
+          const diskMs = (diskDefaults.memorySearch || {}) as Record<string, unknown>;
+          diskMs.extraPaths = mergedExtra;
+          diskDefaults.memorySearch = diskMs;
+          diskAgents.defaults = diskDefaults;
+          diskConfig.agents = diskAgents;
+          await writeFile(configPath, JSON.stringify(diskConfig, null, 2) + "\n", "utf-8");
+        } catch {
+          // Non-fatal — gateway may still have it in-memory
+        }
+
         // Reindex is best-effort — the config patch (extraPaths) already succeeded
         let reindexWarning: string | undefined;
         try {

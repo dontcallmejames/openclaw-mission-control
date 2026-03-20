@@ -31,7 +31,7 @@ async function orFetch<T>(path: string, key: string): Promise<T> {
 }
 
 export async function collectOpenRouterBilling(): Promise<CollectorResult> {
-  const credential = await resolveBillingCredential(["OPENROUTER_MANAGEMENT_KEY"]);
+  const credential = await resolveBillingCredential(["OPENROUTER_MANAGEMENT_KEY", "OPENROUTER_MGMT_KEY"]);
   if (!credential.value) {
     const unavailable = defaultCollectorUnavailable("openrouter", credential.requiredCredential);
     await saveProviderCollectorStatus(unavailable);

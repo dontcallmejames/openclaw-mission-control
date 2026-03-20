@@ -6,7 +6,7 @@ import {
   AlertTriangle, X, FileText, Hash, Cpu, HardDrive,
   Layers, RotateCcw, Activity, Filter, ArrowUpDown, Eye, Copy,
   Box, BarChart3, CircleDot, Pencil, Save, Lock, KeyRound,
-  Zap, Trash2,
+  Zap, Trash2, ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SectionBody, SectionHeader, SectionLayout } from "@/components/section-layout";
@@ -32,6 +32,7 @@ type AgentMemory = {
 };
 
 type SearchResult = { path: string; startLine: number; endLine: number; score: number; snippet: string; source: string };
+type VectorDocOption = { path: string; selected: boolean; source: "workspace" | "custom" };
 type Toast = { message: string; type: "success" | "error" };
 
 const EMBEDDING_MODELS: { provider: string; model: string; dims: number; label: string }[] = [
@@ -235,6 +236,15 @@ function EmbeddingModelEditor({
   const [editing, setEditing] = useState(false);
   const [provider, setProvider] = useState(currentProvider);
   const [model, setModel] = useState(currentModel);
+  const currentLocalModelPath = useMemo(() => {
+    const local = memorySearch?.local as Record<string, unknown> | undefined;
+    return (local?.modelPath as string) || "";
+  }, [memorySearch]);
+  const currentFallback = useMemo(() => (memorySearch?.fallback as string) || "none", [memorySearch]);
+  const currentCacheEnabled = useMemo(() => {
+    const c = memorySearch?.cache as Record<string, unknown> | undefined;
+    return c?.enabled !== false;
+  }, [memorySearch]);
   const [localModelPath, setLocalModelPath] = useState(() => {
     const local = memorySearch?.local as Record<string, unknown> | undefined;
     return (local?.modelPath as string) || "";
@@ -248,6 +258,29 @@ function EmbeddingModelEditor({
   const [authLoading, setAuthLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const preset = EMBEDDING_MODELS.find((m) => m.provider === provider && m.model === model);
+  const localPathChanged =
+    provider === "local" && localModelPath.trim() !== currentLocalModelPath.trim();
+  const fallbackChanged = fallback !== currentFallback;
+  const cacheChanged = cacheEnabled !== currentCacheEnabled;
+  const modelChanged = provider.trim() !== currentProvider || model.trim() !== currentModel;
+  const hasChanges = modelChanged || localPathChanged || fallbackChanged || cacheChanged;
+
+  useEffect(() => {
+    if (!editing) {
+      setProvider(currentProvider);
+      setModel(currentModel);
+      setLocalModelPath(currentLocalModelPath);
+      setFallback(currentFallback);
+      setCacheEnabled(currentCacheEnabled);
+    }
+  }, [
+    editing,
+    currentProvider,
+    currentModel,
+    currentLocalModelPath,
+    currentFallback,
+    currentCacheEnabled,
+  ]);
 
   // Fetch authenticated providers when editor opens
   useEffect(() => {
@@ -307,7 +340,7 @@ function EmbeddingModelEditor({
     <div className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm dark:border-[#2c343d] dark:bg-[#171a1d] space-y-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90"><Cpu className="h-4 w-4 text-stone-700 dark:text-[#d6dce3]" />Change Embedding Model</div>
-        <button onClick={() => { setEditing(false); setProvider(currentProvider); setModel(currentModel); }} className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground/70"><X className="h-4 w-4" /></button>
+        <button onClick={() => { setEditing(false); setProvider(currentProvider); setModel(currentModel); setLocalModelPath(currentLocalModelPath); setFallback(currentFallback); setCacheEnabled(currentCacheEnabled); }} className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground/70"><X className="h-4 w-4" /></button>
       </div>
       <p className="text-xs text-muted-foreground">Changing the embedding model requires a full reindex.</p>
 
@@ -460,9 +493,9 @@ function EmbeddingModelEditor({
       </div>
 
       {/* Reindex warning */}
-      {(provider !== currentProvider || model !== currentModel) && (
+      {hasChanges && (
         <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
-          <p className="flex items-center gap-1.5 text-xs text-amber-300"><AlertTriangle className="h-3 w-3" />Changing model requires a full reindex. Existing embeddings will be replaced.{preset && currentDims && preset.dims !== currentDims && " Vector dimensions will change."}</p>
+          <p className="flex items-center gap-1.5 text-xs text-amber-300"><AlertTriangle className="h-3 w-3" />Changes to embedding config can require reindexing for complete results.{modelChanged ? " Existing embeddings may be replaced." : ""}{preset && currentDims && preset.dims !== currentDims && " Vector dimensions will change."}</p>
         </div>
       )}
 
@@ -471,18 +504,18 @@ function EmbeddingModelEditor({
         <button
           onClick={() => {
             const options: EmbeddingOptions = {};
-            if (provider === "local" && localModelPath.trim()) options.localModelPath = localModelPath.trim();
-            if (fallback && fallback !== "none") options.fallback = fallback;
+            if (provider === "local") options.localModelPath = localModelPath.trim();
+            options.fallback = fallback;
             options.cacheEnabled = cacheEnabled;
             onSave(provider, model, options);
             setEditing(false);
           }}
-          disabled={saving || !provider.trim() || !model.trim() || (provider === currentProvider && model === currentModel)}
+          disabled={saving || !provider.trim() || !model.trim() || !hasChanges}
           className="flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-xs font-medium hover:bg-primary/90 disabled:opacity-50"
         >
           {saving ? <span className="inline-flex items-center gap-0.5"><span className="h-1 w-1 animate-bounce rounded-full bg-current [animation-delay:0ms]" /><span className="h-1 w-1 animate-bounce rounded-full bg-current [animation-delay:150ms]" /><span className="h-1 w-1 animate-bounce rounded-full bg-current [animation-delay:300ms]" /></span> : <Save className="h-3.5 w-3.5" />}Save & Reindex
         </button>
-        <button onClick={() => { setEditing(false); setProvider(currentProvider); setModel(currentModel); }} className="rounded-lg px-3 py-2 text-xs text-muted-foreground hover:text-foreground/90">Cancel</button>
+        <button onClick={() => { setEditing(false); setProvider(currentProvider); setModel(currentModel); setLocalModelPath(currentLocalModelPath); setFallback(currentFallback); setCacheEnabled(currentCacheEnabled); }} className="rounded-lg px-3 py-2 text-xs text-muted-foreground hover:text-foreground/90">Cancel</button>
       </div>
     </div>
   );
@@ -499,11 +532,24 @@ const SETUP_OPTIONS: SetupProvider[] = [
   { id: "local", provider: "local", model: "auto", dims: 0, label: "Local (Offline)", description: "Runs on your device. No API key needed. Downloads ~600MB model.", needsKey: "", icon: "💻" },
 ];
 
-function SetupWizard({ authProviders, onSetup, busy }: { authProviders: string[]; onSetup: (provider: string, model: string, options?: { localModelPath?: string }) => void; busy: boolean }) {
+function SetupWizard({
+  authProviders,
+  onSetup,
+  onSaveOpenAiKey,
+  savingOpenAiKey,
+  busy,
+}: {
+  authProviders: string[];
+  onSetup: (provider: string, model: string, options?: { localModelPath?: string }) => void;
+  onSaveOpenAiKey: (apiKey: string) => Promise<boolean>;
+  savingOpenAiKey: boolean;
+  busy: boolean;
+}) {
   const [selected, setSelected] = useState<string | null>(null);
   const [customProvider, setCustomProvider] = useState("");
   const [customModel, setCustomModel] = useState("");
   const [localModelPath, setLocalModelPath] = useState("");
+  const [openAiKey, setOpenAiKey] = useState("");
 
   // Auto-select best available option
   useEffect(() => {
@@ -592,23 +638,52 @@ function SetupWizard({ authProviders, onSetup, busy }: { authProviders: string[]
           })}
         </div>
 
-        {/* Auth hint for locked providers — use onboard (API keys), not models auth login (needs plugins) */}
-        {SETUP_OPTIONS.some((o) => o.provider !== "local" && !authProviders.includes(o.provider)) && (
+        {/* OpenAI key quick-connect for embeddings */}
+        {!authProviders.includes("openai") && (
           <div className="rounded-xl border border-stone-200 bg-white p-3.5 shadow-sm dark:border-[#2c343d] dark:bg-[#171a1d]">
-            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <p className="flex items-center gap-2 text-xs font-medium text-foreground/80">
               <KeyRound className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-300" />
-              Add your API key via the onboarding wizard:
+              Add your OpenAI key for embeddings
             </p>
-            <ul className="mt-2 space-y-1 pl-5 list-disc text-xs font-mono text-muted-foreground/60">
-              {!authProviders.includes("openai") && (
-                <li><code className="rounded bg-muted px-1.5 py-0.5 text-emerald-700 dark:text-emerald-300">openclaw onboard --auth-choice openai-api-key</code></li>
-              )}
-              {!authProviders.includes("google") && (
-                <li><code className="rounded bg-muted px-1.5 py-0.5 text-emerald-700 dark:text-emerald-300">openclaw onboard --auth-choice gemini-api-key</code></li>
-              )}
-            </ul>
-            <p className="mt-2 text-xs text-muted-foreground/70">
-              Or run <code className="rounded bg-muted px-1 py-0.5">openclaw onboard</code> and pick a provider in the wizard.
+            <p className="mt-1 text-xs text-muted-foreground/70">
+              Create a key at{" "}
+              <a
+                href="https://platform.openai.com/api-keys"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-emerald-700 underline hover:text-emerald-800 dark:text-emerald-300 dark:hover:text-emerald-200"
+              >
+                platform.openai.com
+                <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+              . ChatGPT Plus does not include API credits.
+            </p>
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+              <input
+                type="password"
+                value={openAiKey}
+                onChange={(e) => setOpenAiKey(e.target.value)}
+                placeholder="sk-..."
+                aria-label="OpenAI API key for embeddings"
+                className="flex-1 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 font-mono text-xs text-stone-900 outline-none focus:border-emerald-500/30 dark:border-[#2c343d] dark:bg-[#15191d] dark:text-[#f5f7fa]"
+              />
+              <button
+                type="button"
+                disabled={savingOpenAiKey || !openAiKey.trim()}
+                onClick={async () => {
+                  const ok = await onSaveOpenAiKey(openAiKey.trim());
+                  if (ok) {
+                    setOpenAiKey("");
+                    setSelected("openai");
+                  }
+                }}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                {savingOpenAiKey ? "Saving..." : "Save key"}
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground/60">
+              CLI alternative: <code className="rounded bg-muted px-1 py-0.5">openclaw onboard --auth-choice openai-api-key</code>
             </p>
           </div>
         )}
@@ -709,8 +784,13 @@ export function VectorView() {
   const [loading, setLoading] = useState(true);
   const [reindexingAgents, setReindexingAgents] = useState<Set<string>>(new Set());
   const [deletingNamespace, setDeletingNamespace] = useState<string | null>(null);
-  const [ensuringExtraPaths, setEnsuringExtraPaths] = useState(false);
+  const [savingDocSelection, setSavingDocSelection] = useState(false);
+  const [docsLoading, setDocsLoading] = useState(false);
+  const [docFilter, setDocFilter] = useState("");
+  const [vectorDocs, setVectorDocs] = useState<VectorDocOption[]>([]);
   const [saving, setSaving] = useState(false);
+  const [savingOpenAiKey, setSavingOpenAiKey] = useState(false);
+  const [openAiKeyDraft, setOpenAiKeyDraft] = useState("");
   const [settingUp, setSettingUp] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [query, setQuery] = useState("");
@@ -728,6 +808,21 @@ export function VectorView() {
   const [authProviders, setAuthProviders] = useState<string[]>([]);
   const [memorySearch, setMemorySearch] = useState<Record<string, unknown> | null>(null);
 
+  const fetchDocuments = useCallback(async () => {
+    setDocsLoading(true);
+    try {
+      const res = await fetch("/api/vector?scope=documents");
+      if (!res.ok) throw new Error(`Documents fetch failed (${res.status})`);
+      const data = await res.json();
+      setVectorDocs(Array.isArray(data.docs) ? data.docs : []);
+    } catch (err) {
+      console.error("Vector docs fetch:", err);
+      setVectorDocs([]);
+    } finally {
+      setDocsLoading(false);
+    }
+  }, []);
+
   const fetchStatus = useCallback(async () => {
     try {
       const res = await fetch("/api/vector?scope=status");
@@ -742,6 +837,7 @@ export function VectorView() {
       setAgents(data.agents || []);
       setAuthProviders(data.authProviders || []);
       setMemorySearch(data.memorySearch || null);
+      await fetchDocuments();
     }
     catch (err) {
       console.error("Vector fetch:", err);
@@ -749,7 +845,7 @@ export function VectorView() {
       setApiDegraded(true);
     }
     finally { setLoading(false); }
-  }, []);
+  }, [fetchDocuments]);
 
   useEffect(() => { fetchStatus(); }, [fetchStatus]);
 
@@ -824,18 +920,54 @@ export function VectorView() {
     }
   }, [fetchStatus]);
 
-  const handleEnsureExtraPaths = useCallback(async () => {
-    setEnsuringExtraPaths(true);
+  const handleSaveDocSelection = useCallback(async (paths: string[]) => {
+    setSavingDocSelection(true);
     try {
-      const res = await fetch("/api/vector", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "ensure-extra-paths" }) });
-      if (!res.ok) throw new Error(`Failed (${res.status})`);
-      const d = await res.json();
-      if (d.ok) {
-        const paths = Array.isArray(d.extraPaths) ? d.extraPaths : [];
-        setToast({ message: paths.length > 0 ? `Added ${paths.length} reference file(s) to index and reindexed` : (typeof d.message === "string" ? d.message : "Done"), type: "success" });
-        await fetchStatus();
-      } else setToast({ message: typeof d.error === "string" ? d.error : "Failed", type: "error" });
-    } catch (e) { setToast({ message: e instanceof Error ? e.message : "Failed", type: "error" }); } finally { setEnsuringExtraPaths(false); }
+      const res = await fetch("/api/vector", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "set-extra-paths", extraPaths: paths, reindex: true }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || !d.ok) {
+        throw new Error(typeof d.error === "string" ? d.error : `Save failed (${res.status})`);
+      }
+      if (Array.isArray(d.skippedPaths) && d.skippedPaths.length > 0) {
+        setToast({ message: `Saved with ${d.skippedPaths.length} skipped path(s)`, type: "error" });
+      } else if (d.warning) {
+        setToast({ message: String(d.warning), type: "error" });
+      } else {
+        setToast({ message: `Saved ${paths.length} document path(s) and reindexed`, type: "success" });
+      }
+      await fetchStatus();
+    } catch (e) {
+      setToast({ message: e instanceof Error ? e.message : "Failed to save document selection", type: "error" });
+    } finally {
+      setSavingDocSelection(false);
+    }
+  }, [fetchStatus]);
+
+  const handleSaveOpenAiKey = useCallback(async (apiKey: string): Promise<boolean> => {
+    setSavingOpenAiKey(true);
+    try {
+      const res = await fetch("/api/models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "auth-provider", provider: "openai", token: apiKey }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        throw new Error(typeof data.error === "string" ? data.error : "OpenAI key validation failed");
+      }
+      setToast({ message: "OpenAI key saved. You can now use OpenAI embeddings.", type: "success" });
+      await fetchStatus();
+      return true;
+    } catch (e) {
+      setToast({ message: e instanceof Error ? e.message : "Failed to save OpenAI key", type: "error" });
+      return false;
+    } finally {
+      setSavingOpenAiKey(false);
+    }
   }, [fetchStatus]);
 
   const handleUpdateModel = useCallback(async (prov: string, mod: string, options?: EmbeddingOptions) => {
@@ -848,8 +980,18 @@ export function VectorView() {
       const res = await fetch("/api/vector", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (!res.ok) throw new Error(`Update failed (${res.status})`);
       const d = await res.json();
-      if (d.ok) { setToast({ message: "Model changed to " + prov + "/" + mod + ". Run reindex.", type: "success" }); await fetchStatus(); }
-      else setToast({ message: typeof d.error === "string" ? d.error : "Failed", type: "error" });
+      if (!d.ok) {
+        setToast({ message: typeof d.error === "string" ? d.error : "Failed", type: "error" });
+      } else {
+        const reindexRes = await fetch("/api/vector", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "reindex", force: true }),
+        });
+        if (!reindexRes.ok) throw new Error(`Reindex failed (${reindexRes.status})`);
+        setToast({ message: "Model changed to " + prov + "/" + mod + " and reindexed.", type: "success" });
+        await fetchStatus();
+      }
     } catch (e) { setToast({ message: e instanceof Error ? e.message : "Update failed", type: "error" }); } finally { setSaving(false); }
   }, [fetchStatus]);
 
@@ -892,16 +1034,27 @@ export function VectorView() {
   const curModel = primary?.status.model || "";
   const curDims = primary?.status.vector.dims || null;
   const curBackend = primary?.status.backend || "";
+  const selectedDocPaths = useMemo(
+    () => vectorDocs.filter((doc) => doc.selected).map((doc) => doc.path),
+    [vectorDocs],
+  );
+  const filteredDocs = useMemo(() => {
+    const q = docFilter.trim().toLowerCase();
+    if (!q) return vectorDocs;
+    return vectorDocs.filter((doc) => doc.path.toLowerCase().includes(q));
+  }, [vectorDocs, docFilter]);
+  const workspaceDocs = useMemo(
+    () => vectorDocs.filter((doc) => doc.source === "workspace"),
+    [vectorDocs],
+  );
+  const hasMemorySearchConfig = Boolean(memorySearch && Object.keys(memorySearch).length > 0);
 
   // Determine if setup is needed:
   // - No agents returned, OR
-  // - memorySearch not configured, OR
-  // - No provider detected, OR
-  // - Zero chunks across all agents and no provider set
+  // - No memorySearch config and no active provider detected.
   const needsSetup =
     agents.length === 0 ||
-    (!memorySearch && !curProv) ||
-    (totalChunks === 0 && totalFiles === 0 && !curProv);
+    (!hasMemorySearchConfig && !curProv);
 
   if (loading) {
     return (
@@ -914,7 +1067,13 @@ export function VectorView() {
   if (needsSetup) {
     return (
       <>
-        <SetupWizard authProviders={authProviders} onSetup={handleSetup} busy={settingUp} />
+        <SetupWizard
+          authProviders={authProviders}
+          onSetup={handleSetup}
+          onSaveOpenAiKey={handleSaveOpenAiKey}
+          savingOpenAiKey={savingOpenAiKey}
+          busy={settingUp}
+        />
         {toast && <ToastBar toast={toast} onDone={() => setToast(null)} />}
       </>
     );
@@ -968,6 +1127,51 @@ export function VectorView() {
           )}
         </div>
 
+        {!authProviders.includes("openai") && (
+          <div className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm dark:border-[#2c343d] dark:bg-[#171a1d]">
+            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
+              <KeyRound className="h-4 w-4 text-stone-700 dark:text-[#d6dce3]" />
+              OpenAI embeddings key
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground/70">
+              Add your OpenAI API key to enable `text-embedding-3-*` models for vector search.
+            </p>
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+              <input
+                type="password"
+                placeholder="Paste OpenAI key (sk-...)"
+                aria-label="OpenAI API key input"
+                className="flex-1 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 font-mono text-xs text-stone-900 outline-none focus:border-emerald-500/30 dark:border-[#2c343d] dark:bg-[#15191d] dark:text-[#f5f7fa]"
+                value={openAiKeyDraft}
+                onChange={(e) => setOpenAiKeyDraft(e.target.value)}
+              />
+              <button
+                type="button"
+                disabled={savingOpenAiKey || !openAiKeyDraft.trim()}
+                onClick={async () => {
+                  const draft = openAiKeyDraft.trim();
+                  if (!draft) return;
+                  const ok = await handleSaveOpenAiKey(draft);
+                  if (ok) {
+                    setOpenAiKeyDraft("");
+                  }
+                }}
+                className="inline-flex items-center justify-center rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                {savingOpenAiKey ? "Saving..." : "Save key"}
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground/60">
+              Get a key at{" "}
+              <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-emerald-700 underline hover:text-emerald-800 dark:text-emerald-300 dark:hover:text-emerald-200">
+                platform.openai.com
+                <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+              . ChatGPT Plus does not include API credits.
+            </p>
+          </div>
+        )}
+
         <EmbeddingModelEditor
           currentProvider={curProv}
           currentModel={curModel}
@@ -1017,15 +1221,120 @@ export function VectorView() {
         <div><h2 className="mb-3 flex items-center gap-2 text-xs font-semibold text-foreground/90"><Database className="h-4 w-4 text-stone-700 dark:text-[#d6dce3]" />Namespaces<span className="rounded bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">{agents.length}</span></h2><div className="space-y-2">{agents.map((a) => <AgentIndexCard key={a.agentId} agent={a} onReindex={handleReindex} onDelete={handleDeleteNamespace} reindexing={reindexingAgents.has(a.agentId)} deleting={deletingNamespace === a.agentId} />)}</div></div>
 
         <div className="rounded-xl border border-foreground/10 bg-foreground/5 p-4 space-y-3">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90"><FileText className="h-4 w-4 text-stone-700 dark:text-[#d6dce3]" />Workspace reference files</div>
-
+              <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
+                <FileText className="h-4 w-4 text-stone-700 dark:text-[#d6dce3]" />
+                Document indexing
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground/70">
+                Select which documents to include in `memorySearch.extraPaths`.
+              </p>
             </div>
-            <button type="button" onClick={handleEnsureExtraPaths} disabled={ensuringExtraPaths} className="shrink-0 flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-3 py-2 text-xs font-medium hover:bg-primary/90 disabled:opacity-50">
-              {ensuringExtraPaths ? <span className="inline-flex items-center gap-0.5"><span className="h-1 w-1 animate-bounce rounded-full bg-current [animation-delay:0ms]" /><span className="h-1 w-1 animate-bounce rounded-full bg-current [animation-delay:150ms]" /><span className="h-1 w-1 animate-bounce rounded-full bg-current [animation-delay:300ms]" /></span> : <FileText className="h-3.5 w-3.5" />}
-              {ensuringExtraPaths ? "Adding & reindexing…" : "Include reference files in search"}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={workspaceDocs.length === 0}
+                onClick={() => {
+                  setVectorDocs((prev) =>
+                    prev.map((doc) =>
+                      doc.source === "workspace" ? { ...doc, selected: true } : { ...doc }
+                    )
+                  );
+                }}
+                className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-medium text-stone-700 hover:bg-stone-100 disabled:opacity-50 dark:border-[#2c343d] dark:bg-[#20252a] dark:text-[#d6dce3] dark:hover:bg-[#232a31]"
+              >
+                Vector all
+              </button>
+              <button
+                type="button"
+                disabled={selectedDocPaths.length === 0}
+                onClick={() => {
+                  setVectorDocs((prev) => prev.map((doc) => ({ ...doc, selected: false })));
+                }}
+                className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-medium text-red-500 hover:bg-red-500/15 disabled:opacity-50"
+              >
+                Remove all
+              </button>
+              <button
+                type="button"
+                disabled={savingDocSelection}
+                onClick={() => void handleSaveDocSelection(selectedDocPaths)}
+                className="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                {savingDocSelection ? "Saving..." : "Save selection"}
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={docFilter}
+              onChange={(e) => setDocFilter(e.target.value)}
+              placeholder="Filter docs..."
+              aria-label="Filter indexable docs"
+              className="min-w-56 flex-1 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-900 outline-none focus:border-emerald-500/30 dark:border-[#2c343d] dark:bg-[#15191d] dark:text-[#f5f7fa]"
+            />
+            <span className="text-xs text-muted-foreground/70">
+              {selectedDocPaths.length} selected / {vectorDocs.length} total
+            </span>
+          </div>
+
+          <div className="max-h-64 overflow-auto rounded-lg border border-stone-200 bg-white dark:border-[#2c343d] dark:bg-[#171a1d]">
+            {docsLoading ? (
+              <div className="px-3 py-3 text-xs text-muted-foreground/70">Loading documents...</div>
+            ) : filteredDocs.length === 0 ? (
+              <div className="px-3 py-3 text-xs text-muted-foreground/70">No indexable documents found.</div>
+            ) : (
+              filteredDocs.map((doc) => (
+                <label
+                  key={doc.path}
+                  className="flex cursor-pointer items-center justify-between gap-3 border-b border-stone-200 px-3 py-2 last:border-b-0 hover:bg-stone-50 dark:border-[#2c343d] dark:hover:bg-[#20252a]"
+                >
+                  <div className="min-w-0 flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={doc.selected}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setVectorDocs((prev) =>
+                          prev.map((row) =>
+                            row.path === doc.path ? { ...row, selected: checked } : row
+                          )
+                        );
+                      }}
+                      className="rounded border-foreground/20"
+                    />
+                    <span className="truncate font-mono text-xs text-foreground/80" title={doc.path}>
+                      {doc.path}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {doc.source === "custom" && (
+                      <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
+                        Custom
+                      </span>
+                    )}
+                    {doc.selected && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setVectorDocs((prev) =>
+                            prev.map((row) =>
+                              row.path === doc.path ? { ...row, selected: false } : row
+                            )
+                          );
+                        }}
+                        className="rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-[10px] font-medium text-red-500 hover:bg-red-500/15"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </label>
+              ))
+            )}
           </div>
         </div>
 

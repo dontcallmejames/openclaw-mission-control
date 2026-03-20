@@ -263,6 +263,8 @@ export function MemoryView() {
   const hasInitializedCollapse = useRef(false);
   const hasLoadedWorkspaceFilesCollapse = useRef(false);
   const jumpTarget = searchParams.get("memoryPath") || searchParams.get("memoryFile");
+  const jumpLine = searchParams.get("memoryLine");
+  const [scrollToLine, setScrollToLine] = useState<number | null>(null);
 
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState>(null);
@@ -834,12 +836,16 @@ export function MemoryView() {
       return;
     }
 
+    const lineNum = jumpLine ? parseInt(jumpLine, 10) : null;
+    const validLine = lineNum && Number.isFinite(lineNum) ? lineNum : null;
+
     setActiveTab("journal");
     const normalizedLower = normalized.toLowerCase();
     const isLongTerm = normalizedLower === "memory.md" || normalizedLower === "memory";
 
     if (isLongTerm && memoryMd) {
       selectLongTermMemory();
+      if (validLine) setScrollToLine(validLine);
       clearSearchJumpParams();
       return;
     }
@@ -847,6 +853,7 @@ export function MemoryView() {
     const byJournal = daily.find((d) => d.name.toLowerCase() === normalizedLower);
     if (byJournal) {
       loadJournalFile(byJournal.name, byJournal.date);
+      if (validLine) setScrollToLine(validLine);
       clearSearchJumpParams();
       return;
     }
@@ -858,23 +865,47 @@ export function MemoryView() {
 
     if (byAgentPath) {
       selectAgentMemory(byAgentPath);
+      if (validLine) setScrollToLine(validLine);
+      clearSearchJumpParams();
+      return;
+    }
+
+    // Check workspace files (AGENTS.md, IDENTITY.md, etc.)
+    const byWorkspace = workspaceFiles.find(
+      (f) => f.name.toLowerCase() === normalizedLower
+    );
+    if (byWorkspace) {
+      setWorkspaceFilesCollapsed(false);
+      loadWorkspaceFile(byWorkspace);
+      if (validLine) setScrollToLine(validLine);
       clearSearchJumpParams();
       return;
     }
 
     loadJournalFile(normalized, normalized);
+    if (validLine) setScrollToLine(validLine);
     clearSearchJumpParams();
   }, [
     agentMemoryFiles,
     clearSearchJumpParams,
     daily,
+    jumpLine,
     jumpTarget,
     loadJournalFile,
+    loadWorkspaceFile,
     loading,
     memoryMd,
     selectAgentMemory,
     selectLongTermMemory,
+    workspaceFiles,
   ]);
+
+  // Clear scrollToLine after it's been consumed by the editor
+  useEffect(() => {
+    if (scrollToLine == null) return;
+    const timer = setTimeout(() => setScrollToLine(null), 500);
+    return () => clearTimeout(timer);
+  }, [scrollToLine]);
 
   const togglePeriod = (key: string) => {
     setCollapsedPeriods((prev) => {
@@ -1527,6 +1558,7 @@ export function MemoryView() {
                     onContentChange={handleContentChange}
                     onSave={handleSave}
                     placeholder="Click to start writing..."
+                    scrollToLine={scrollToLine}
                   />
                 ) : null}
               </div>

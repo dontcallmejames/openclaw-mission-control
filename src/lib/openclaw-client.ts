@@ -16,6 +16,9 @@ import type { RunCliResult } from "./openclaw-cli";
 export type TransportMode = "cli" | "http" | "auto";
 
 export interface OpenClawClient {
+  /** Resolve which transport should be used right now (effective mode). */
+  resolveTransport(): Promise<TransportMode>;
+
   /** Run a CLI command and return parsed JSON (equivalent to runCliJson). */
   runJson<T>(args: string[], timeout?: number): Promise<T>;
 

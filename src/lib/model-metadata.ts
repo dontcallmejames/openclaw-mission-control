@@ -320,6 +320,8 @@ export function estimateCostUsd(
   const p = meta?.pricing
     ?? (dynamicPricing ? lookupDynamicPricing(fullModel, dynamicPricing) : null);
   if (!p) return null;
+  if (p.inputPer1M < 0 || p.outputPer1M < 0) return null;
+  if ((p.cacheReadPer1M ?? 0) < 0 || (p.cacheWritePer1M ?? 0) < 0) return null;
   let cost =
     (inputTokens / 1_000_000) * p.inputPer1M +
     (outputTokens / 1_000_000) * p.outputPer1M;
@@ -329,7 +331,7 @@ export function estimateCostUsd(
   if (cacheWriteTokens > 0 && p.cacheWritePer1M != null) {
     cost += (cacheWriteTokens / 1_000_000) * p.cacheWritePer1M;
   }
-  return cost;
+  return Number.isFinite(cost) && cost >= 0 ? cost : null;
 }
 
 /**

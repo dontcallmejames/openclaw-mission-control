@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { X, ExternalLink, FileText, ArrowUpCircle } from "lucide-react";
+import { X, ExternalLink, FileText, ArrowUpCircle, Loader2 } from "lucide-react";
 import { MarkdownContent } from "@/components/markdown-content";
 
 const DISMISS_KEY = "openclaw-update-dismissed";
@@ -12,6 +12,8 @@ type UpdateInfo = {
   updateAvailable: boolean;
   changelog: string | null;
   releaseUrl: string | null;
+  channelLabel?: string | null;
+  installKind?: string | null;
   error?: string;
 };
 
@@ -25,6 +27,9 @@ export function OpenClawUpdateBanner() {
   const [loading, setLoading] = useState(true);
   const [showChangelog, setShowChangelog] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateSuccess, setUpdateSuccess] = useState<string | null>(null);
 
   const fetchUpdate = useCallback(async () => {
     setLoading(true);
@@ -37,6 +42,8 @@ export function OpenClawUpdateBanner() {
         updateAvailable: Boolean(data.updateAvailable),
         changelog: data.changelog ?? null,
         releaseUrl: data.releaseUrl ?? null,
+        channelLabel: data.channelLabel ?? null,
+        installKind: data.installKind ?? null,
         error: data.error,
       });
       if (data.updateAvailable && typeof window !== "undefined") {
@@ -62,6 +69,35 @@ export function OpenClawUpdateBanner() {
     }
   }, [info]);
 
+  const handleRunUpdate = useCallback(async () => {
+    setUpdateError(null);
+    setUpdateSuccess(null);
+    setUpdating(true);
+    try {
+      const res = await fetch("/api/openclaw-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "run-update" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.ok) {
+        throw new Error(String(data?.error || `Update failed (${res.status})`));
+      }
+      const updatedVersion = typeof data?.currentVersionAfter === "string" && data.currentVersionAfter
+        ? data.currentVersionAfter
+        : info?.latestVersion || "latest";
+      setUpdateSuccess(`Updated to v${updatedVersion}.`);
+      await fetchUpdate();
+      if (typeof data?.currentVersionAfter === "string" && data.currentVersionAfter) {
+        sessionStorage.setItem(DISMISS_KEY, data.currentVersionAfter);
+      }
+    } catch (err) {
+      setUpdateError(err instanceof Error ? err.message : "Update failed");
+    } finally {
+      setUpdating(false);
+    }
+  }, [fetchUpdate, info?.latestVersion]);
+
   if (loading || !info?.updateAvailable || dismissed) return null;
 
   return (
@@ -82,6 +118,11 @@ export function OpenClawUpdateBanner() {
                   You have v{info.currentVersion}
                 </p>
               )}
+              {info.channelLabel && (
+                <p className="text-[11px] text-muted-foreground/80">
+                  Channel: {info.channelLabel}
+                </p>
+              )}
             </div>
             <button
               type="button"
@@ -98,21 +139,36 @@ export function OpenClawUpdateBanner() {
               onClick={() => setShowChangelog(true)}
               className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
-              <FileText className="h-3 w-3" />
-              Changelog
-            </button>
+                <FileText className="h-3 w-3" />
+                Changelog
+              </button>
             {info.releaseUrl && (
               <a
                 href={info.releaseUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1.5 rounded-lg bg-[var(--accent-brand)] px-2.5 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
                 <ExternalLink className="h-3 w-3" />
-                Update
+                Release
               </a>
             )}
+            <button
+              type="button"
+              disabled={updating}
+              onClick={() => void handleRunUpdate()}
+              className="ml-auto flex items-center gap-1.5 rounded-lg bg-[var(--accent-brand)] px-2.5 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+            >
+              {updating ? <Loader2 className="h-3 w-3 animate-spin" /> : <ArrowUpCircle className="h-3 w-3" />}
+              {updating ? "Updating..." : "Update"}
+            </button>
           </div>
+          {(updateError || updateSuccess) && (
+            <div className="border-t border-border/50 px-4 py-2">
+              {updateError && <p className="text-[11px] text-red-400">{updateError}</p>}
+              {!updateError && updateSuccess && <p className="text-[11px] text-emerald-400">{updateSuccess}</p>}
+            </div>
+          )}
         </div>
       </div>
 
@@ -156,7 +212,7 @@ export function OpenClawUpdateBanner() {
             </div>
             <div className="flex flex-col gap-2 border-t border-foreground/10 px-4 py-3">
               <p className="text-xs text-muted-foreground">
-                Update from terminal: <code className="rounded bg-muted px-1.5 py-0.5 font-mono">npm install -g openclaw@latest</code>
+                Update from terminal: <code className="rounded bg-muted px-1.5 py-0.5 font-mono">openclaw update --yes</code>
               </p>
               <div className="flex justify-end gap-2">
                 {info.releaseUrl && (

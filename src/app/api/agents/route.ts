@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readFile } from "fs/promises";
-import { join } from "path";
+import { mkdir, readFile, writeFile } from "fs/promises";
+import { dirname, join, resolve } from "path";
 import { getOpenClawHome, getDefaultWorkspaceSync } from "@/lib/paths";
 import { runCli, parseJsonFromCliOutput } from "@/lib/openclaw";
 import { fetchGatewaySessions, summarizeSessionsByAgent } from "@/lib/gateway-sessions";
@@ -627,13 +627,6 @@ export async function GET() {
       });
     }
 
-    // Sort: default first, then by name
-    agents.sort((a, b) => {
-      if (a.isDefault && !b.isDefault) return -1;
-      if (!a.isDefault && b.isDefault) return 1;
-      return a.name.localeCompare(b.name);
-    });
-
     // Get owner info from IDENTITY.md of the default workspace
     let ownerName: string | null = null;
     try {
@@ -878,6 +871,71 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true, action: "update", id });
       }
 
+      case "reorder": {
+        const nextOrder = Array.isArray(body.agentIds)
+          ? body.agentIds.map((v: unknown) => String(v || "").trim()).filter(Boolean)
+          : [];
+        if (nextOrder.length === 0) {
+          return NextResponse.json(
+            { error: "agentIds is required" },
+            { status: 400 }
+          );
+        }
+
+        const configData = await gatewayCallWithRetry<Record<string, unknown>>(
+          "config.get",
+          undefined,
+          10000,
+        );
+        const parsed = asRecord(configData.parsed);
+        const agentsSection = asRecord(parsed.agents);
+        const agentsList = cloneConfigRows(agentsSection.list);
+        if (agentsList.length === 0) {
+          return NextResponse.json(
+            { error: "No agents.list entries found in config to reorder." },
+            { status: 400 }
+          );
+        }
+
+        const byId = new Map<string, Record<string, unknown>>();
+        for (const row of agentsList) {
+          const id = String(row.id || "").trim();
+          if (!id) continue;
+          byId.set(id, row);
+        }
+
+        const seen = new Set<string>();
+        const orderedRows: Record<string, unknown>[] = [];
+        for (const id of nextOrder) {
+          if (seen.has(id)) continue;
+          const row = byId.get(id);
+          if (!row) continue;
+          seen.add(id);
+          orderedRows.push(row);
+        }
+        for (const row of agentsList) {
+          const id = String(row.id || "").trim();
+          if (!id || seen.has(id)) continue;
+          orderedRows.push(row);
+        }
+
+        try {
+          await gatewayCallWithRetry<Record<string, unknown>>(
+            "config.set",
+            {
+              path: "agents.list",
+              value: orderedRows,
+            },
+            12000,
+          );
+        } catch {
+          await applyConfigPatchWithRetry({
+            agents: { list: orderedRows },
+          });
+        }
+        return NextResponse.json({ ok: true, action: "reorder", count: orderedRows.length });
+      }
+
       case "set-identity": {
         const id = String(body.id || "").trim();
         if (!id) {
@@ -950,6 +1008,41 @@ export async function POST(request: NextRequest) {
         });
 
         return NextResponse.json({ ok: true, action, id, identity: nextIdentity });
+      }
+
+      case "save-identity-markdown": {
+        const id = String(body.id || "").trim();
+        const workspace = String(body.workspace || "").trim();
+        const markdown = typeof body.markdown === "string" ? body.markdown : "";
+        if (!id) {
+          return NextResponse.json(
+            { error: "Agent ID is required" },
+            { status: 400 }
+          );
+        }
+        if (!workspace) {
+          return NextResponse.json(
+            { error: "Workspace is required" },
+            { status: 400 }
+          );
+        }
+        const resolvedWorkspace = resolve(workspace);
+        if (!resolvedWorkspace.startsWith(OPENCLAW_HOME)) {
+          return NextResponse.json(
+            { error: "Workspace path is outside OPENCLAW_HOME" },
+            { status: 400 }
+          );
+        }
+        const identityPath = join(resolvedWorkspace, "IDENTITY.md");
+        await mkdir(dirname(identityPath), { recursive: true });
+        await writeFile(identityPath, markdown, "utf-8");
+        return NextResponse.json({
+          ok: true,
+          action,
+          id,
+          path: identityPath,
+          bytes: Buffer.byteLength(markdown, "utf-8"),
+        });
       }
 
       case "delete": {

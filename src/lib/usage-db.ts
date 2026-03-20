@@ -9,6 +9,7 @@ const exec = promisify(execFile);
 const DB_PATH = join(getOpenClawHome(), "mission-control", "usage.db");
 
 let initialized = false;
+let initPromise: Promise<void> | null = null;
 
 function sqlQuote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
@@ -50,7 +51,8 @@ export async function usageDbExec(sql: string): Promise<void> {
 
 export async function usageDbQuery<T>(sql: string): Promise<T[]> {
   await ensureUsageDb();
-  const stdout = await sqlite(["-json", DB_PATH, PRAGMA_PREFIX + sql]);
+  // Use sqlite shell timeout command so JSON output stays parseable.
+  const stdout = await sqlite(["-cmd", ".timeout 5000", "-json", DB_PATH, sql]);
   const trimmed = (stdout || "").trim();
   if (!trimmed) return [];
   try {
@@ -99,8 +101,15 @@ export async function usageDbGetMeta(key: string): Promise<string | null> {
 
 export async function ensureUsageDb(): Promise<void> {
   if (initialized) return;
-  await mkdir(dirname(DB_PATH), { recursive: true });
-  const schema = `
+  if (initPromise) {
+    await initPromise;
+    return;
+  }
+  initPromise = (async () => {
+    const home = getOpenClawHome();
+    await mkdir(home, { recursive: true });
+    await mkdir(dirname(DB_PATH), { recursive: true });
+    const schema = `
 PRAGMA journal_mode=WAL;
 PRAGMA busy_timeout=5000;
 
@@ -236,6 +245,13 @@ CREATE TABLE IF NOT EXISTS usage_meta (
   updated_at_ms INTEGER NOT NULL
 );
 `;
-  await sqlite([DB_PATH, schema], 30000);
-  initialized = true;
+    try {
+      await sqlite([DB_PATH, schema], 30000);
+      initialized = true;
+    } catch (e) {
+      initPromise = null;
+      throw e;
+    }
+  })();
+  await initPromise;
 }

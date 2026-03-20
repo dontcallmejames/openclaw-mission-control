@@ -229,14 +229,19 @@ export async function GET(request: NextRequest) {
       diagnostics.warnings.push("Mission Control could not refresh its system-managed usage jobs.");
     });
 
-    const agentIds: string[] = [];
+    const configuredAgentIds: string[] = [];
+    const discoveredAgentIds: string[] = [];
     for (const c of configList) {
-      if (c.id) agentIds.push(c.id as string);
+      if (c.id) {
+        const id = c.id as string;
+        configuredAgentIds.push(id);
+        discoveredAgentIds.push(id);
+      }
     }
     try {
       const dirs = await readdir(join(OPENCLAW_HOME, "agents"), { withFileTypes: true });
       for (const d of dirs) {
-        if (d.isDirectory() && !agentIds.includes(d.name)) agentIds.push(d.name);
+        if (d.isDirectory() && !discoveredAgentIds.includes(d.name)) discoveredAgentIds.push(d.name);
       }
     } catch (err) {
       if (getErrorCode(err) !== "ENOENT") {
@@ -451,9 +456,13 @@ export async function GET(request: NextRequest) {
     }
 
     let modelStatus: ModelStatusData | null = null;
+    let configuredProviders: string[] = [];
     try {
       const summary = await buildModelsSummary();
       modelStatus = summary.status as ModelStatusData;
+      configuredProviders = Array.isArray(summary.configuredProviders)
+        ? summary.configuredProviders.map((provider) => String(provider).trim().toLowerCase()).filter(Boolean)
+        : [];
     } catch (err) {
       diagnostics.sources.modelStatus.ok = false;
       diagnostics.sources.modelStatus.error = errorMessage(err);
@@ -473,7 +482,7 @@ export async function GET(request: NextRequest) {
     // Gather session file sizes concurrently per-agent with a cap to prevent slow I/O.
     const sessionFileSizes: { agentId: string; sizeBytes: number; fileCount: number }[] = [];
     const MAX_SESSION_AGENTS = 50;
-    const sessionAgentSlice = agentIds.slice(0, MAX_SESSION_AGENTS);
+    const sessionAgentSlice = discoveredAgentIds.slice(0, MAX_SESSION_AGENTS);
     const sessionSizeResults = await Promise.allSettled(
       sessionAgentSlice.map(async (agentId) => {
         const sessDir = join(OPENCLAW_HOME, "agents", agentId, "sessions");
@@ -577,7 +586,7 @@ export async function GET(request: NextRequest) {
       liveTelemetry: {
         totals: {
           sessions: allSessions.length,
-          agents: agentIds.length,
+          agents: configuredAgentIds.length,
           models: Object.keys(byModel).length,
           inputTokens: grandTotalInput,
           outputTokens: grandTotalOutput,
@@ -610,6 +619,7 @@ export async function GET(request: NextRequest) {
       },
       providerBilling: {
         providers: providerBilling,
+        configuredProviders,
       },
       reconciliation: {
         summary: reconciliation.summary,
@@ -624,10 +634,15 @@ export async function GET(request: NextRequest) {
       },
       coverage: {
         estimatedPricingCoveragePct: diagnostics.pricing.coveragePct,
-        invoiceGradeProviders: ["openrouter", "openai", "anthropic"],
+        invoiceGradeProviders: providerBilling
+          .filter((provider) => provider.billingMode === "invoice_api")
+          .map((provider) => provider.provider),
         estimateOnlyProviders: [
           ...new Set(modelBreakdown.map((model) => modelProvider(model.fullModel))),
-        ].filter((provider) => !["openrouter", "openai", "anthropic"].includes(provider)),
+        ].filter((provider) => {
+          const snapshot = providerBilling.find((entry) => entry.provider === provider);
+          return snapshot?.billingMode !== "invoice_api";
+        }),
       },
       diagnostics: {
         ...diagnostics,
@@ -643,7 +658,7 @@ export async function GET(request: NextRequest) {
         outputTokens: grandTotalOutput,
         totalTokens: grandTotalTokens,
         models: Object.keys(byModel).length,
-        agents: agentIds.length,
+        agents: configuredAgentIds.length,
         staleSessions,
       },
       liveCost: {

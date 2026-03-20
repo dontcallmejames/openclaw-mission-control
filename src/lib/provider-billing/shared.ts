@@ -11,6 +11,15 @@ import {
   usageDbTransaction,
 } from "@/lib/usage-db";
 import type { ProviderBillingProviderSnapshot, ProviderBillingRow } from "@/lib/usage-types";
+import { fetchConfig } from "@/lib/gateway-config";
+
+export type ProviderBillingRequirement = {
+  provider: string;
+  billingMode: "invoice_api" | "estimate_only";
+  requiredCredential: string;
+  docsUrl: string;
+  setupHint: string;
+};
 
 export type CollectorResult = {
   provider: string;
@@ -48,7 +57,65 @@ type ProviderStatusMeta = {
 };
 
 const OPENCLAW_HOME = getOpenClawHome();
-const SUPPORTED_PROVIDERS = ["openrouter", "openai", "anthropic", "google", "groq", "mistral"] as const;
+export const PROVIDER_BILLING_REQUIREMENTS: Record<string, ProviderBillingRequirement> = {
+  openrouter: {
+    provider: "openrouter",
+    billingMode: "invoice_api",
+    requiredCredential: "OPENROUTER_MANAGEMENT_KEY",
+    docsUrl: "https://openrouter.ai/docs/api/api-reference/credits/get-credits",
+    setupHint: "Requires a management key for /credits and /activity billing endpoints.",
+  },
+  openai: {
+    provider: "openai",
+    billingMode: "invoice_api",
+    requiredCredential: "OPENAI_ADMIN_API_KEY",
+    docsUrl: "https://developers.openai.com/cookbook/examples/completions_usage_api/",
+    setupHint: "Organization Costs API requires an Admin API key (owner-level).",
+  },
+  anthropic: {
+    provider: "anthropic",
+    billingMode: "invoice_api",
+    requiredCredential: "ANTHROPIC_ADMIN_API_KEY",
+    docsUrl: "https://docs.anthropic.com/en/api/data-usage-cost-api",
+    setupHint: "Usage/Cost Admin API requires an Anthropic admin key.",
+  },
+  mistral: {
+    provider: "mistral",
+    billingMode: "invoice_api",
+    requiredCredential: "MISTRAL_API_KEY",
+    docsUrl: "https://docs.mistral.ai/api/",
+    setupHint: "Usage API can provide daily real usage when endpoint access is enabled.",
+  },
+  xai: {
+    provider: "xai",
+    billingMode: "invoice_api",
+    requiredCredential: "XAI_MANAGEMENT_KEY",
+    docsUrl: "https://docs.x.ai/developers/rest-api-reference/management/billing",
+    setupHint: "Management API usage endpoint requires management key and team id (XAI_TEAM_ID).",
+  },
+  google: {
+    provider: "google",
+    billingMode: "estimate_only",
+    requiredCredential: "GOOGLE_API_KEY",
+    docsUrl: "https://ai.google.dev/gemini-api/docs/billing",
+    setupHint: "No simple Gemini billing API for AI Studio keys; costs are estimate-only in dashboard.",
+  },
+  groq: {
+    provider: "groq",
+    billingMode: "estimate_only",
+    requiredCredential: "GROQ_API_KEY",
+    docsUrl: "https://console.groq.com/docs/billing-faqs",
+    setupHint: "No public billing API; dashboard uses local telemetry estimates.",
+  },
+};
+
+export const SUPPORTED_BILLING_PROVIDERS = Object.keys(PROVIDER_BILLING_REQUIREMENTS) as Array<
+  keyof typeof PROVIDER_BILLING_REQUIREMENTS
+>;
+
+export function getProviderBillingRequirement(provider: string): ProviderBillingRequirement | null {
+  return PROVIDER_BILLING_REQUIREMENTS[provider] ?? null;
+}
 
 function parseDotEnv(content: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -79,13 +146,54 @@ async function readOpenClawEnv(): Promise<Record<string, string>> {
   }
 }
 
+async function readOpenClawConfigEnv(): Promise<Record<string, string>> {
+  try {
+    const configData = await fetchConfig(6000);
+    const parsedEnv = configData.parsed?.env;
+    if (parsedEnv && typeof parsedEnv === "object" && !Array.isArray(parsedEnv)) {
+      const out: Record<string, string> = {};
+      for (const [key, value] of Object.entries(parsedEnv as Record<string, unknown>)) {
+        if (typeof value === "string" && value.trim()) {
+          out[key] = value.trim();
+        }
+      }
+      if (Object.keys(out).length > 0) {
+        return out;
+      }
+    }
+  } catch {
+    // Fallback to local file for compatibility when gateway is unavailable.
+  }
+  try {
+    const raw = await readFile(join(OPENCLAW_HOME, "openclaw.json"), "utf-8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const env = parsed?.env;
+    if (!env || typeof env !== "object" || Array.isArray(env)) {
+      return {};
+    }
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(env as Record<string, unknown>)) {
+      if (typeof value === "string" && value.trim()) {
+        out[key] = value.trim();
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 export async function resolveBillingCredential(
   envKeys: string[],
 ): Promise<{ value: string | null; requiredCredential: string }> {
+  const configEnv = await readOpenClawConfigEnv();
   const env = await readOpenClawEnv();
   for (const key of envKeys) {
     if (typeof process.env[key] === "string" && process.env[key]?.trim()) {
       return { value: String(process.env[key]).trim(), requiredCredential: key };
+    }
+    if (typeof configEnv[key] === "string" && configEnv[key].trim()) {
+      return { value: configEnv[key].trim(), requiredCredential: key };
     }
     if (typeof env[key] === "string" && env[key].trim()) {
       return { value: env[key].trim(), requiredCredential: key };
@@ -208,18 +316,28 @@ export async function getProviderBillingRows(provider: string, limitDays = 31): 
       "ORDER BY bucket_start_ms ASC, full_model ASC;",
     ].join(" "),
   );
-  return rows.map((row) => ({
-    accountScope: String(row.account_scope || "default"),
-    fullModel: row.full_model == null ? null : String(row.full_model),
-    bucketStartMs: Number(row.bucket_start_ms || 0),
-    bucketEndMs: Number(row.bucket_end_ms || 0),
-    spendUsd: row.spend_usd == null ? null : Number(row.spend_usd),
-    requests: row.requests == null ? null : Number(row.requests),
-    inputTokens: row.input_tokens == null ? null : Number(row.input_tokens),
-    outputTokens: row.output_tokens == null ? null : Number(row.output_tokens),
-    reasoningTokens: row.reasoning_tokens == null ? null : Number(row.reasoning_tokens),
-    isFinal: Boolean(row.is_final),
-  }));
+  return rows
+    .map((row) => ({
+      accountScope: String(row.account_scope || "default"),
+      fullModel: row.full_model == null ? null : String(row.full_model),
+      bucketStartMs: Number(row.bucket_start_ms || 0),
+      bucketEndMs: Number(row.bucket_end_ms || 0),
+      spendUsd: row.spend_usd == null ? null : Number(row.spend_usd),
+      requests: row.requests == null ? null : Number(row.requests),
+      inputTokens: row.input_tokens == null ? null : Number(row.input_tokens),
+      outputTokens: row.output_tokens == null ? null : Number(row.output_tokens),
+      reasoningTokens: row.reasoning_tokens == null ? null : Number(row.reasoning_tokens),
+      isFinal: Boolean(row.is_final),
+    }))
+    .filter(
+      (row) =>
+        row.bucketStartMs > 0 &&
+        (row.spendUsd !== null ||
+          row.requests !== null ||
+          row.inputTokens !== null ||
+          row.outputTokens !== null ||
+          row.reasoningTokens !== null),
+    );
 }
 
 const FRESHNESS_MAX_AGE_MS: Record<string, number> = {
@@ -229,6 +347,7 @@ const FRESHNESS_MAX_AGE_MS: Record<string, number> = {
   google: 60 * 60 * 1000,
   groq: 60 * 60 * 1000,
   mistral: 15 * 60 * 1000,
+  xai: 15 * 60 * 1000,
 };
 
 function providerFreshness(provider: string, lastFetchMs: number | null): "fresh" | "stale" | "unknown" {
@@ -242,6 +361,7 @@ export async function getProviderSnapshot(provider: string): Promise<ProviderBil
   await ensureUsageDb();
   const rows = await getProviderBillingRows(provider);
   const status = await loadProviderCollectorStatus(provider);
+  const requirement = getProviderBillingRequirement(provider);
   const lastFetchRaw = await usageDbGetMeta(`provider.${provider}.last_fetch_ms`);
   const lastFetchMs = lastFetchRaw ? Number(lastFetchRaw) || null : null;
   const freshness = providerFreshness(provider, lastFetchMs);
@@ -257,7 +377,12 @@ export async function getProviderSnapshot(provider: string): Promise<ProviderBil
     provider,
     available,
     reason: available ? undefined : status?.reason || "Billing access not configured",
-    requiredCredential: available ? undefined : status?.requiredCredential,
+    requiredCredential: available
+      ? undefined
+      : status?.requiredCredential || requirement?.requiredCredential,
+    billingMode: requirement?.billingMode || "estimate_only",
+    docsUrl: requirement?.docsUrl,
+    setupHint: requirement?.setupHint,
     freshness,
     bucketGranularity: rows.length > 0 ? "day" : null,
     latestBucketStartMs: rows.length > 0 ? rows[rows.length - 1].bucketStartMs : null,
@@ -268,11 +393,11 @@ export async function getProviderSnapshot(provider: string): Promise<ProviderBil
 }
 
 export async function getAllProviderSnapshots(): Promise<ProviderBillingProviderSnapshot[]> {
-  return Promise.all(SUPPORTED_PROVIDERS.map((provider) => getProviderSnapshot(provider)));
+  return Promise.all(SUPPORTED_BILLING_PROVIDERS.map((provider) => getProviderSnapshot(provider)));
 }
 
 export async function maybeCollectProvider(
-  provider: (typeof SUPPORTED_PROVIDERS)[number],
+  provider: (typeof SUPPORTED_BILLING_PROVIDERS)[number],
 ): Promise<CollectorResult> {
   if (provider === "openrouter") {
     const mod = await import("./openrouter");
@@ -294,13 +419,17 @@ export async function maybeCollectProvider(
     const mod = await import("./mistral");
     return mod.collectMistralBilling();
   }
+  if (provider === "xai") {
+    const mod = await import("./xai");
+    return mod.collectXaiBilling();
+  }
   const mod = await import("./anthropic");
   return mod.collectAnthropicBilling();
 }
 
 export async function ensureProviderBillingFreshness(): Promise<CollectorResult[]> {
   const results: CollectorResult[] = [];
-  for (const provider of SUPPORTED_PROVIDERS) {
+  for (const provider of SUPPORTED_BILLING_PROVIDERS) {
     const lastFetchRaw = await usageDbGetMeta(`provider.${provider}.last_fetch_ms`);
     const lastFetchMs = lastFetchRaw ? Number(lastFetchRaw) || 0 : 0;
     const shouldCollect =

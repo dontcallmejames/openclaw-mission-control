@@ -20,11 +20,14 @@ type UseSmartPollOptions = {
  * - Re-polls immediately when tab becomes visible or window gains focus
  * - Deduplicates in-flight requests
  */
+const MIN_POLL_INTERVAL_MS = 5000;
+
 export function useSmartPoll(
   fn: () => void | Promise<void>,
   options: UseSmartPollOptions = {},
 ) {
-  const { intervalMs = 5000, sseActive = false, enabled = true, immediate = true } = options;
+  const { intervalMs: rawIntervalMs = 5000, sseActive = false, enabled = true, immediate = true } = options;
+  const intervalMs = Math.max(rawIntervalMs, MIN_POLL_INTERVAL_MS);
 
   const fnRef = useRef(fn);
   fnRef.current = fn;

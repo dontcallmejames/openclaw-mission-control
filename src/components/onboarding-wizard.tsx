@@ -1,11 +1,14 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, type CSSProperties } from "react";
+import { useSmartPoll } from "@/hooks/use-smart-poll";
 import {
+  AlertTriangle,
   Check,
   ChevronRight,
   ChevronLeft,
   Loader2,
+  ExternalLink,
   Key,
   Bot,
   ShieldCheck,
@@ -39,9 +42,16 @@ function isAdvisedModel(provider: string, modelId: string): boolean {
   return modelId === advised || modelId.endsWith(advised.replace(/^[^/]+\//, ""));
 }
 
+/** True if the key looks like an OpenAI key (sk- but not sk-or-). Used with OpenRouter to show only OpenAI models. */
+function looksLikeOpenAIKey(key: string): boolean {
+  const k = key.trim();
+  return k.length > 0 && k.startsWith("sk-") && !k.toLowerCase().startsWith("sk-or-");
+}
+
 type DmRequest = {
   channel: string;
   code: string;
+  account?: string;
   senderId?: string;
   senderName?: string;
   message?: string;
@@ -53,6 +63,7 @@ type Provider = {
   label: string;
   placeholder: string;
   defaultModelHint: string;
+  url: string;
   logo: React.ReactNode;
 };
 
@@ -62,6 +73,7 @@ const PROVIDERS: Provider[] = [
     label: "OpenRouter",
     placeholder: "sk-or-...",
     defaultModelHint: "claude-sonnet",
+    url: "https://openrouter.ai/keys",
     logo: (
       <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
         <path d="M12 2L2 7l10 5 10-5-10-5z" />
@@ -75,6 +87,7 @@ const PROVIDERS: Provider[] = [
     label: "OpenAI",
     placeholder: "sk-...",
     defaultModelHint: "gpt-4",
+    url: "https://platform.openai.com/api-keys",
     logo: (
       <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor">
         <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z" />
@@ -86,6 +99,7 @@ const PROVIDERS: Provider[] = [
     label: "Anthropic",
     placeholder: "sk-ant-...",
     defaultModelHint: "claude-sonnet",
+    url: "https://console.anthropic.com/settings/keys",
     logo: (
       <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor">
         <path d="M13.827 3.52h3.603L24 20.48h-3.603l-6.57-16.96zm-7.258 0h3.767L16.906 20.48h-3.674l-1.343-3.461H5.017l-1.344 3.46H0l6.569-16.96zm2.327 5.093L6.453 14.58h4.886L8.896 8.613z" />
@@ -132,9 +146,31 @@ const SAVING_STAGES = [
   { label: "Saving configuration...", threshold: 0 },
   { label: "Writing config file...", threshold: 10 },
   { label: "Starting gateway...", threshold: 25 },
-  { label: "Connecting to channel...", threshold: 50 },
+  { label: "Applying channel settings...", threshold: 50 },
   { label: "Almost ready...", threshold: 80 },
 ];
+
+const SAVING_STAGES_NO_CHANNEL = [
+  { label: "Saving configuration...", threshold: 0 },
+  { label: "Writing config file...", threshold: 10 },
+  { label: "Starting gateway...", threshold: 25 },
+  { label: "Checking gateway health...", threshold: 50 },
+  { label: "Almost ready...", threshold: 80 },
+];
+
+const POST_ONBOARDING_KEY = "mc-post-onboarding";
+
+function isMatchingChannel(channelName: string, expected: string): boolean {
+  const ch = channelName.toLowerCase();
+  const base = expected.toLowerCase();
+  return (
+    ch === base ||
+    ch.startsWith(`${base}:`) ||
+    ch.startsWith(`${base}-`) ||
+    ch.startsWith(`${base}/`) ||
+    ch.startsWith(`${base}@`)
+  );
+}
 
 type Props = { onComplete: () => void };
 
@@ -154,6 +190,7 @@ export function OnboardingWizard({ onComplete }: Props) {
   const [channelTokens, setChannelTokens] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [saveProgress, setSaveProgress] = useState(0);
+  const [savingIncludesChannel, setSavingIncludesChannel] = useState(false);
   const saveProgressRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Step 3 state (pairing)
@@ -161,8 +198,11 @@ export function OnboardingWizard({ onComplete }: Props) {
   const [approving, setApproving] = useState<string | null>(null);
   const [approved, setApproved] = useState(false);
   const [botNames, setBotNames] = useState<Record<string, string>>({});
+  const [pairingPollError, setPairingPollError] = useState(false);
+  const [pairingRefreshing, setPairingRefreshing] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const autoValidateRef = useRef<((p: string, key: string) => void) | null>(null);
 
   const selectedProvider = PROVIDERS.find((p) => p.id === provider)!;
@@ -196,7 +236,11 @@ export function OnboardingWizard({ onComplete }: Props) {
       });
       const modelsData = await modelsRes.json();
       if (modelsData.ok && Array.isArray(modelsData.models)) {
-        const list: Model[] = modelsData.models;
+        let list: Model[] = modelsData.models;
+        // OpenRouter accepts OpenAI keys; with an OpenAI key only OpenAI models work — filter to those
+        if (providerId === "openrouter" && looksLikeOpenAIKey(key)) {
+          list = list.filter((m) => /openai\/|^openai\//i.test(m.id) || m.id.includes("/openai/"));
+        }
         // Sort advised model to top
         const sorted = [...list].sort((a, b) =>
           isAdvisedModel(providerId, a.id) ? -1 : isAdvisedModel(providerId, b.id) ? 1 : 0
@@ -231,16 +275,29 @@ export function OnboardingWizard({ onComplete }: Props) {
 
   // ── Step 2: Save config + restart gateway ──
 
-  const handleSaveAndRestart = useCallback(async () => {
-    if (!activeChannelToken.trim()) return;
+  const completeOnboarding = useCallback(() => {
+    try {
+      localStorage.setItem(POST_ONBOARDING_KEY, "1");
+    } catch {
+      // ignore storage failures in private mode
+    }
+    onComplete();
+  }, [onComplete]);
+
+  const saveAndRestart = useCallback(async (opts: { goToPairing: boolean; tokens?: Record<string, string> }) => {
+    const effectiveTokens = opts.tokens ?? channelTokens;
+    const telegramToken = (effectiveTokens.telegram || "").trim();
+    const discordToken = (effectiveTokens.discord || "").trim();
+    const hasChannelTokens = Boolean(telegramToken || discordToken);
+
+    setSavingIncludesChannel(hasChannelTokens);
     setSaving(true);
     setSaveProgress(0);
     setError(null);
+    setSaveError(null);
 
-    // Animate progress bar over ~25s (gateway can take 15-30s)
     saveProgressRef.current = setInterval(() => {
       setSaveProgress((prev) => {
-        // Ease toward 90 then stall — actual completion moves it to 100
         if (prev >= 90) return prev;
         const remaining = 90 - prev;
         return prev + remaining * 0.035;
@@ -256,49 +313,84 @@ export function OnboardingWizard({ onComplete }: Props) {
           provider,
           apiKey,
           model: selectedModel,
-          telegramToken: channelTokens.telegram || "",
-          discordToken: channelTokens.discord || "",
+          telegramToken,
+          discordToken,
         }),
       });
       const data = await res.json();
       if (!data.ok) {
-        setError(data.error ?? "Failed to save configuration.");
+        setSaveError(data.error ?? "Failed to save configuration.");
         return;
       }
       setSaveProgress(100);
-      setTimeout(() => setStep(3), 300);
+      setTimeout(() => {
+        if (opts.goToPairing && hasChannelTokens) {
+          setStep(3);
+          return;
+        }
+        completeOnboarding();
+      }, 300);
     } catch {
-      setError("Network error. Please try again.");
+      setSaveError("Network error while saving. Please try again.");
     } finally {
       if (saveProgressRef.current) clearInterval(saveProgressRef.current);
       setSaving(false);
     }
-  }, [provider, apiKey, selectedModel, channelTokens, activeChannelToken]);
+  }, [provider, apiKey, selectedModel, channelTokens, completeOnboarding]);
+
+  const handleSaveAndRestart = useCallback(async () => {
+    if (!activeChannelToken.trim()) return;
+    await saveAndRestart({ goToPairing: true });
+  }, [activeChannelToken, saveAndRestart]);
+
+  const handleStartChatNow = useCallback(async () => {
+    await saveAndRestart({
+      goToPairing: false,
+      tokens: { telegram: "", discord: "" },
+    });
+  }, [saveAndRestart]);
+
+  const handleSetUpLater = useCallback(async () => {
+    await saveAndRestart({
+      goToPairing: false,
+      tokens: { telegram: "", discord: "" },
+    });
+  }, [saveAndRestart]);
 
   // ── Step 3: Poll pairing requests ──
 
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   const configuredChannels = CHANNELS.filter((c) => channelTokens[c.id]?.trim());
 
-  const fetchPairing = useCallback(async () => {
+  const fetchPairing = useCallback(async (showRefreshing = false) => {
+    if (showRefreshing) setPairingRefreshing(true);
     try {
-      const res = await fetch("/api/pairing");
+      // Cache-bust so browsers/proxies never return a stale empty list
+      const res = await fetch(`/api/pairing?_=${Date.now()}`, {
+        cache: "no-store",
+        headers: { Pragma: "no-cache" },
+      });
+      if (!res.ok) throw new Error(`Pairing API ${res.status}`);
       const data = await res.json();
-      const configured = CHANNELS.filter((c) => channelTokens[c.id]?.trim()).map((c) => c.id);
-      const relevantDm = (data.dm || []).filter(
-        (r: DmRequest) => configured.includes(r.channel),
-      );
-      setPairingRequests(relevantDm);
+      const allDm = data.dm || [];
+      // On step 3 always show all DM requests so pending Telegram (etc.) is never hidden
+      setPairingRequests(allDm);
+      setPairingPollError(false);
     } catch {
-      // silent
+      setPairingPollError(true);
+    } finally {
+      if (showRefreshing) setPairingRefreshing(false);
     }
-  }, [channelTokens]);
+  }, []);
+
+  useSmartPoll(fetchPairing, { intervalMs: 5000, enabled: step === 3 });
+
+  // Fetch pairing requests immediately when entering step 3 so the list is not empty on first paint
+  useEffect(() => {
+    if (step === 3) void fetchPairing();
+  }, [step, fetchPairing]);
 
   useEffect(() => {
     if (step !== 3) return;
-    fetchPairing();
-    pollRef.current = setInterval(fetchPairing, 4000);
     // Fetch bot names for configured channels
     for (const ch of configuredChannels) {
       const token = channelTokens[ch.id]?.trim();
@@ -316,26 +408,22 @@ export function OnboardingWizard({ onComplete }: Props) {
         })
         .catch(() => {});
     }
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [step, fetchPairing, configuredChannels, channelTokens]);
+  }, [step, configuredChannels, channelTokens]);
 
   const handleApprove = useCallback(
-    async (channel: string, code: string) => {
+    async (channel: string, code: string, account?: string) => {
       setApproving(code);
       setError(null);
       try {
         const res = await fetch("/api/pairing", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "approve-dm", channel, code }),
+          body: JSON.stringify({ action: "approve-dm", channel, code, account }),
         });
         const data = await res.json().catch(() => null);
         if (data?.ok) {
           setApproved(true);
-          if (pollRef.current) clearInterval(pollRef.current);
-          setTimeout(() => onComplete(), 1500);
+          setTimeout(() => completeOnboarding(), 1500);
         } else {
           setError(data?.error || `Approve failed (${res.status}).`);
         }
@@ -345,11 +433,12 @@ export function OnboardingWizard({ onComplete }: Props) {
         setApproving(null);
       }
     },
-    [onComplete],
+    [completeOnboarding],
   );
 
   // Derive current saving stage label
-  const currentSavingStage = SAVING_STAGES.filter((s) => saveProgress >= s.threshold).at(-1)!;
+  const activeSavingStages = savingIncludesChannel ? SAVING_STAGES : SAVING_STAGES_NO_CHANNEL;
+  const currentSavingStage = activeSavingStages.filter((s) => saveProgress >= s.threshold).at(-1)!;
 
   const STEPS = [
     { n: 1, label: "Model" },
@@ -415,7 +504,7 @@ export function OnboardingWizard({ onComplete }: Props) {
         {/* Divider */}
         <div className="h-px bg-stone-100 dark:bg-[#23282e]" />
 
-        <div className="px-8 py-7">
+        <div className="px-8 py-7 max-h-[min(70vh,520px)] overflow-y-auto overscroll-contain">
           {step === 1 && (
             <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
               <div className="space-y-0.5">
@@ -469,6 +558,70 @@ export function OnboardingWizard({ onComplete }: Props) {
                     </button>
                   );
                 })}
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs leading-relaxed text-stone-500 dark:text-[#a8b0ba]">
+                  New to this? Start with OpenRouter &mdash; it supports all major models and you only pay for what you use.
+                </p>
+                <div className="rounded-xl border border-stone-200 dark:border-[#23282e] bg-stone-50 dark:bg-[#0d1014] p-4">
+                  <div className="mb-2 flex items-center gap-2">
+                    <Key className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
+                    <span className="text-xs font-semibold text-stone-800 dark:text-[#d6dce3]">
+                      Get your {selectedProvider.label} API key
+                    </span>
+                  </div>
+                  <ol className="space-y-2.5">
+                    <li className="flex items-start gap-3">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-stone-200/80 dark:bg-[#20252a] text-[10px] font-semibold text-stone-600 dark:text-[#7a8591] ring-1 ring-stone-300 dark:ring-[#2c343d]">
+                        1
+                      </span>
+                      <p className="pt-0.5 text-xs leading-relaxed text-stone-500 dark:text-[#a8b0ba]">
+                        Open the{" "}
+                        <a
+                          href={selectedProvider.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 underline underline-offset-2 hover:opacity-90"
+                        >
+                          {selectedProvider.label} API keys page
+                          <ExternalLink className="h-2.5 w-2.5" />
+                        </a>
+                        .
+                      </p>
+                    </li>
+                    <li className="flex items-start gap-3">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-stone-200/80 dark:bg-[#20252a] text-[10px] font-semibold text-stone-600 dark:text-[#7a8591] ring-1 ring-stone-300 dark:ring-[#2c343d]">
+                        2
+                      </span>
+                      <p className="pt-0.5 text-xs leading-relaxed text-stone-500 dark:text-[#a8b0ba]">
+                        Create a new API key and copy it.
+                      </p>
+                    </li>
+                    <li className="flex items-start gap-3">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-stone-200/80 dark:bg-[#20252a] text-[10px] font-semibold text-stone-600 dark:text-[#7a8591] ring-1 ring-stone-300 dark:ring-[#2c343d]">
+                        3
+                      </span>
+                      <p className="pt-0.5 text-xs leading-relaxed text-stone-500 dark:text-[#a8b0ba]">
+                        Paste it below and we&apos;ll validate it instantly.
+                      </p>
+                    </li>
+                  </ol>
+                  {provider === "openai" && (
+                    <p className="mt-3 rounded-lg bg-amber-100/70 dark:bg-amber-500/10 px-2.5 py-2 text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+                      ChatGPT Plus does not include API access. You need API credits at{" "}
+                      <a
+                        href="https://platform.openai.com/settings/organization/billing"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium underline underline-offset-2"
+                      >
+                        platform.openai.com/settings/organization/billing
+                      </a>
+                      .
+                    </p>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -545,19 +698,28 @@ export function OnboardingWizard({ onComplete }: Props) {
                     Validate your API key first
                   </div>
                 ) : (
+                  <>
                   <Combobox
                     items={models}
                     value={models.find((m) => m.id === selectedModel) ?? null}
                     onValueChange={(val) => setSelectedModel(val?.id ?? "")}
                     itemToStringLabel={(m) => getFriendlyModelName(m.id)}
-                    itemToStringValue={(m) => `${getFriendlyModelName(m.id)} ${m.name} ${m.id}`}
+                    itemToStringValue={(m) => {
+                      const friendly = getFriendlyModelName(m.id);
+                      const idWithSpaces = m.id.replace(/[-./_]/g, " ").toLowerCase();
+                      const friendlyLower = friendly.toLowerCase();
+                      return `${friendly} ${m.name} ${m.id} ${idWithSpaces} ${friendlyLower}`;
+                    }}
                   >
                     <ComboboxInput
-                      placeholder="Search models..."
+                      placeholder="Type to search (e.g. claude, sonnet, gpt)…"
                       className="w-full"
+                      aria-label="Search or select model"
                     />
                     <ComboboxContent>
-                      <ComboboxEmpty>No models match your search.</ComboboxEmpty>
+                      <ComboboxEmpty>
+                        <span className="block text-muted-foreground">No models match. Try a shorter term (e.g. &quot;claude&quot;, &quot;sonnet&quot;) or scroll to browse.</span>
+                      </ComboboxEmpty>
                       <ComboboxList>
                         {(model) => (
                           <ComboboxItem key={model.id} value={model}>
@@ -579,19 +741,85 @@ export function OnboardingWizard({ onComplete }: Props) {
                       </ComboboxList>
                     </ComboboxContent>
                   </Combobox>
+                  <p className="mt-1.5 text-[11px] text-stone-400 dark:text-[#5a6270]">
+                    Search by display name or model ID — partial matches work
+                  </p>
+                  </>
                 )}
               </div>
 
-              <div className="flex justify-end pt-1">
+              {saveError && !saving && (
+                <div className="rounded-xl border border-red-200 dark:border-red-500/20 bg-red-50 dark:bg-red-500/10 p-3.5 animate-in fade-in duration-300">
+                  <div className="flex items-start gap-2.5">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-red-500 dark:text-red-400 mt-0.5" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-red-700 dark:text-red-300">
+                        Configuration failed
+                      </p>
+                      <p className="mt-1 text-xs leading-relaxed text-red-600 dark:text-red-400/90">
+                        {saveError}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSaveError(null)}
+                      className="shrink-0 text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-300"
+                    >
+                      <span className="sr-only">Dismiss</span>
+                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between gap-2 pt-1">
                 <button
-                  onClick={() => { setError(null); setStep(2); }}
-                  disabled={!validated || !selectedModel}
+                  onClick={() => { setError(null); setSaveError(null); setStep(2); }}
+                  disabled={!validated || !selectedModel || saving || validating}
+                  className="rounded-lg px-3 py-2 text-xs font-medium text-stone-500 dark:text-[#a8b0ba] ring-1 ring-stone-200 dark:ring-[#2c343d] hover:bg-stone-100 dark:hover:bg-[#1c2128] disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
+                >
+                  Connect Telegram/Discord now
+                </button>
+                <button
+                  onClick={handleStartChatNow}
+                  disabled={!validated || !selectedModel || saving || validating}
                   className="flex items-center gap-1.5 rounded-lg px-5 py-2.5 text-sm font-medium bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 hover:bg-stone-700 dark:hover:bg-stone-200 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200 shadow-sm"
                 >
-                  Next
-                  <ChevronRight className="h-4 w-4" />
+                  {saving ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Starting...
+                    </>
+                  ) : (
+                    <>
+                      Start chat now
+                      <ChevronRight className="h-4 w-4" />
+                    </>
+                  )}
                 </button>
               </div>
+
+              {saving && (
+                <div className="space-y-2 animate-in fade-in duration-300">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-stone-500 dark:text-[#a8b0ba] transition-all duration-500">
+                      {currentSavingStage.label}
+                    </span>
+                    <span className="text-xs tabular-nums text-stone-400 dark:text-[#5a6270]">
+                      {Math.round(saveProgress)}%
+                    </span>
+                  </div>
+                  <div className="h-1 w-full overflow-hidden rounded-full bg-stone-100 dark:bg-[#23282e]">
+                    <div
+                      className="h-full rounded-full bg-stone-900 dark:bg-stone-200 transition-all duration-500 ease-out"
+                      style={{ width: `${saveProgress}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-stone-400 dark:text-[#5a6270]">
+                    Gateway startup can take up to 30s &mdash; hang tight.
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
@@ -601,11 +829,11 @@ export function OnboardingWizard({ onComplete }: Props) {
                 <div className="flex items-center gap-2 mb-1">
                   <Bot className="h-3.5 w-3.5 text-stone-400 dark:text-[#a8b0ba]" />
                   <h2 className="text-base font-semibold tracking-tight text-stone-900 dark:text-[#f5f7fa]">
-                    Connect a channel
+                    Connect a channel (optional)
                   </h2>
                 </div>
                 <p className="text-sm text-stone-500 dark:text-[#a8b0ba] leading-relaxed">
-                  Choose a messaging platform and enter your bot token.
+                  Connect Telegram or Discord now, or start in browser chat and add channels later.
                 </p>
               </div>
 
@@ -683,7 +911,30 @@ export function OnboardingWizard({ onComplete }: Props) {
                 )}
               </div>
 
-              {/* Progress bar — visible only while saving */}
+              {saveError && !saving && (
+                <div className="rounded-xl border border-red-200 dark:border-red-500/20 bg-red-50 dark:bg-red-500/10 p-3.5 animate-in fade-in duration-300">
+                  <div className="flex items-start gap-2.5">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-red-500 dark:text-red-400 mt-0.5" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-red-700 dark:text-red-300">
+                        Configuration failed
+                      </p>
+                      <p className="mt-1 text-xs leading-relaxed text-red-600 dark:text-red-400/90">
+                        {saveError}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSaveError(null)}
+                      className="shrink-0 text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-300"
+                    >
+                      <span className="sr-only">Dismiss</span>
+                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {saving && (
                 <div className="space-y-2 animate-in fade-in duration-300">
                   <div className="flex items-center justify-between">
@@ -707,14 +958,23 @@ export function OnboardingWizard({ onComplete }: Props) {
               )}
 
               <div className="flex items-center justify-between pt-1">
-                <button
-                  onClick={() => { setError(null); setStep(1); }}
-                  disabled={saving}
-                  className="flex items-center gap-1.5 rounded-lg px-4 py-2.5 text-sm font-medium text-stone-500 dark:text-[#a8b0ba] hover:bg-stone-100 dark:hover:bg-[#1c2128] disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                  Back
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => { setError(null); setSaveError(null); setStep(1); }}
+                    disabled={saving}
+                    className="flex items-center gap-1.5 rounded-lg px-4 py-2.5 text-sm font-medium text-stone-500 dark:text-[#a8b0ba] hover:bg-stone-100 dark:hover:bg-[#1c2128] disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Back
+                  </button>
+                  <button
+                    onClick={handleSetUpLater}
+                    disabled={saving}
+                    className="rounded-lg px-3 py-2 text-xs font-medium text-stone-500 dark:text-[#a8b0ba] ring-1 ring-stone-200 dark:ring-[#2c343d] hover:bg-stone-100 dark:hover:bg-[#1c2128] disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
+                  >
+                    Set up later
+                  </button>
+                </div>
                 <button
                   onClick={handleSaveAndRestart}
                   disabled={!activeChannelToken.trim() || saving}
@@ -737,7 +997,8 @@ export function OnboardingWizard({ onComplete }: Props) {
           )}
 
           {step === 3 && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+            <div className="relative space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+              {approved && <OnboardingSuccessFireworks />}
               <div className="space-y-0.5">
                 <div className="flex items-center gap-2 mb-1">
                   <ShieldCheck className="h-3.5 w-3.5 text-stone-400 dark:text-[#a8b0ba]" />
@@ -826,7 +1087,7 @@ export function OnboardingWizard({ onComplete }: Props) {
                         </div>
                       </div>
                       <button
-                        onClick={() => handleApprove(req.channel, req.code)}
+                        onClick={() => handleApprove(req.channel, req.code, req.account)}
                         disabled={approving !== null}
                         className="mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-600 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
                       >
@@ -849,10 +1110,38 @@ export function OnboardingWizard({ onComplete }: Props) {
                 </p>
               )}
 
+              {pairingPollError && !approved && (
+                <div className="flex items-center justify-center gap-2 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 px-3 py-2">
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400 shrink-0" />
+                  <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                    Could not reach gateway &mdash; retrying automatically
+                  </p>
+                </div>
+              )}
+
               {!approved && (
-                <p className="text-center text-[11px] text-stone-400 dark:text-[#3a424c]">
-                  Polling every 4s &middot; Codes expire after 1 hour
-                </p>
+                <div className="flex flex-col items-center gap-2">
+                  <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+                    <p className="text-center text-[11px] text-stone-400 dark:text-[#3a424c]">
+                      Polling every 5s &middot; Codes expire after 1 hour
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void fetchPairing(true)}
+                      disabled={pairingRefreshing}
+                      className="text-[11px] font-medium text-sky-600 dark:text-sky-400 hover:text-sky-700 dark:hover:text-sky-300 disabled:opacity-50"
+                    >
+                      {pairingRefreshing ? "Checking…" : "Refresh"}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={completeOnboarding}
+                    className="text-[11px] font-medium text-stone-400 dark:text-[#5a6270] underline underline-offset-2 hover:text-stone-600 dark:hover:text-[#a8b0ba] transition-colors"
+                  >
+                    Skip pairing, start chatting
+                  </button>
+                </div>
               )}
             </div>
           )}
@@ -928,6 +1217,85 @@ function PairingWaitState({ configuredChannels, botNames }: { configuredChannels
         ))}
       </div>
     </div>
+  );
+}
+
+function OnboardingSuccessFireworks() {
+  const bursts = [
+    { x: "14%", y: "24%", delay: 0 },
+    { x: "50%", y: "12%", delay: 140 },
+    { x: "86%", y: "28%", delay: 280 },
+  ];
+  const colors = ["#22c55e", "#14b8a6", "#3b82f6", "#f59e0b", "#ec4899", "#a855f7"];
+  const particlesPerBurst = 14;
+
+  return (
+    <>
+      <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
+        {bursts.map((burst, burstIndex) => (
+          <div
+            key={`${burst.x}-${burst.y}`}
+            className="absolute"
+            style={{ left: burst.x, top: burst.y }}
+          >
+            {Array.from({ length: particlesPerBurst }).map((_, i) => {
+              const angle = Math.round((360 / particlesPerBurst) * i);
+              const distance = 54 + (i % 4) * 14;
+              const delay = burst.delay + i * 20;
+              const particleStyle = {
+                "--fw-angle": `${angle}deg`,
+                "--fw-distance": `${distance}px`,
+                animationDelay: `${delay}ms`,
+                backgroundColor: colors[(i + burstIndex) % colors.length],
+              } as CSSProperties & Record<`--${string}`, string>;
+
+              return (
+                <span
+                  key={`${burstIndex}-${i}`}
+                  className="onboarding-firework-particle"
+                  style={particleStyle}
+                />
+              );
+            })}
+          </div>
+        ))}
+      </div>
+
+      <style jsx>{`
+        .onboarding-firework-particle {
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: 5px;
+          height: 12px;
+          border-radius: 9999px;
+          opacity: 0;
+          transform: translate(-50%, -50%) rotate(var(--fw-angle)) translateY(0) scale(0.65);
+          animation: onboarding-firework-burst 900ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        @keyframes onboarding-firework-burst {
+          0% {
+            opacity: 0;
+            transform: translate(-50%, -50%) rotate(var(--fw-angle)) translateY(0) scale(0.65);
+          }
+          14% {
+            opacity: 1;
+          }
+          100% {
+            opacity: 0;
+            transform: translate(-50%, -50%) rotate(var(--fw-angle)) translateY(calc(var(--fw-distance) * -1)) scale(1);
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .onboarding-firework-particle {
+            animation: none;
+            opacity: 0;
+          }
+        }
+      `}</style>
+    </>
   );
 }
 

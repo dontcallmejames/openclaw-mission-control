@@ -22,6 +22,10 @@ export class CliTransport implements OpenClawClient {
     return "cli";
   }
 
+  async resolveTransport(): Promise<TransportMode> {
+    return "cli";
+  }
+
   async runJson<T>(args: string[], timeout = 15000): Promise<T> {
     return runCliJson<T>(args, timeout);
   }

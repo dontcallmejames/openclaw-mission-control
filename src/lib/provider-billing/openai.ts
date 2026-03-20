@@ -16,7 +16,7 @@ type OpenAiCostsResponse = {
 };
 
 export async function collectOpenAIBilling(): Promise<CollectorResult> {
-  const credential = await resolveBillingCredential(["OPENAI_ADMIN_API_KEY", "OPENAI_API_KEY"]);
+  const credential = await resolveBillingCredential(["OPENAI_ADMIN_API_KEY"]);
   if (!credential.value) {
     const unavailable = defaultCollectorUnavailable("openai", credential.requiredCredential);
     await saveProviderCollectorStatus(unavailable);

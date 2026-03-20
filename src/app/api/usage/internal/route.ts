@@ -21,7 +21,7 @@ async function handleTask(task: string, request: NextRequest) {
   }
   if (task === "collect-provider") {
     const provider = String(request.nextUrl.searchParams.get("provider") || "").trim();
-    const supportedProviders = ["openrouter", "openai", "anthropic", "google", "groq", "mistral"] as const;
+    const supportedProviders = ["openrouter", "openai", "anthropic", "google", "groq", "mistral", "xai"] as const;
     type SupportedProvider = (typeof supportedProviders)[number];
     if (!supportedProviders.includes(provider as SupportedProvider)) {
       return NextResponse.json({ ok: false, error: "Unsupported provider" }, { status: 400 });

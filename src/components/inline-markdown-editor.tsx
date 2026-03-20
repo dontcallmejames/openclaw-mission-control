@@ -23,28 +23,51 @@ type Props = {
   placeholder?: string;
   /** Initial panel mode */
   defaultMode?: "preview" | "edit";
+  /** Line number to scroll to (finds nearest heading at/before this line) */
+  scrollToLine?: number | null;
 };
+
+/* ── Heading ID helper ──────────────────────────────── */
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .trim();
+}
+
+function extractText(children: React.ReactNode): string {
+  if (typeof children === "string") return children;
+  if (typeof children === "number") return String(children);
+  if (Array.isArray(children)) return children.map(extractText).join("");
+  if (children && typeof children === "object" && "props" in children) {
+    return extractText((children as React.ReactElement).props.children);
+  }
+  return "";
+}
 
 /* ── Preview styling (matches MarkdownContent / docs) ── */
 
 const previewComponents = {
   h1: ({ children, ...props }: React.ComponentPropsWithoutRef<"h1">) => (
-    <h1 className="mb-3 mt-6 text-base font-semibold text-foreground first:mt-0" {...props}>
+    <h1 id={slugify(extractText(children))} className="mb-3 mt-6 text-base font-semibold text-foreground first:mt-0" {...props}>
       {children}
     </h1>
   ),
   h2: ({ children, ...props }: React.ComponentPropsWithoutRef<"h2">) => (
-    <h2 className="mb-2 mt-5 text-sm font-semibold text-violet-600 dark:text-violet-400 first:mt-0" {...props}>
+    <h2 id={slugify(extractText(children))} className="mb-2 mt-5 text-sm font-semibold text-violet-600 dark:text-violet-400 first:mt-0" {...props}>
       {children}
     </h2>
   ),
   h3: ({ children, ...props }: React.ComponentPropsWithoutRef<"h3">) => (
-    <h3 className="mb-2 mt-4 text-sm font-semibold text-foreground/90 first:mt-0" {...props}>
+    <h3 id={slugify(extractText(children))} className="mb-2 mt-4 text-sm font-semibold text-foreground/90 first:mt-0" {...props}>
       {children}
     </h3>
   ),
   h4: ({ children, ...props }: React.ComponentPropsWithoutRef<"h4">) => (
-    <h4 className="mb-1.5 mt-3 text-sm font-medium text-foreground/70 first:mt-0" {...props}>
+    <h4 id={slugify(extractText(children))} className="mb-1.5 mt-3 text-sm font-medium text-foreground/70 first:mt-0" {...props}>
       {children}
     </h4>
   ),
@@ -143,8 +166,10 @@ export function InlineMarkdownEditor({
   className,
   placeholder = "Write your markdown here…",
   defaultMode = "preview",
+  scrollToLine,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
   const [localValue, setLocalValue] = useState(content);
   const [isEditing, setIsEditing] = useState(defaultMode === "edit");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -161,6 +186,37 @@ export function InlineMarkdownEditor({
   useEffect(() => {
     setIsEditing(defaultMode === "edit");
   }, [defaultMode]);
+
+  // Scroll to the nearest heading at/before scrollToLine
+  useEffect(() => {
+    if (!scrollToLine || isEditing) return;
+    const timer = setTimeout(() => {
+      const container = previewRef.current;
+      if (!container) return;
+
+      const lines = localValue.split("\n");
+      let bestSlug = "";
+      for (let i = 0; i < Math.min(scrollToLine, lines.length); i++) {
+        const match = lines[i].match(/^#{1,4}\s+(.+)/);
+        if (match) bestSlug = slugify(match[1].trim());
+      }
+
+      if (bestSlug) {
+        const el = container.querySelector(`#${CSS.escape(bestSlug)}`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "start" });
+          el.classList.add("bg-violet-500/20", "rounded", "transition-colors");
+          setTimeout(() => el.classList.remove("bg-violet-500/20", "rounded", "transition-colors"), 2000);
+          return;
+        }
+      }
+
+      const scrollable = container;
+      const ratio = scrollToLine / Math.max(lines.length, 1);
+      scrollable.scrollTop = ratio * scrollable.scrollHeight;
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [scrollToLine, isEditing, localValue]);
 
   useEffect(() => {
     if (isEditing) textareaRef.current?.focus();
@@ -257,7 +313,7 @@ export function InlineMarkdownEditor({
           aria-label="Markdown editor"
         />
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        <div ref={previewRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           <div className="h-full text-left">
             {localValue.trim() ? (
               <ReactMarkdown remarkPlugins={[remarkGfm]} components={previewComponents}>

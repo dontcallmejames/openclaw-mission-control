@@ -37,25 +37,26 @@ const BASE_JOBS: SchedulerJob[] = [
 const PROVIDER_JOBS: Array<
   SchedulerJob & {
     credentials: string[];
+    requireAllCredentials?: boolean;
   }
 > = [
   {
     name: "mc-billing-openrouter",
     everyMs: 15 * 60_000,
     task: "collect-provider&provider=openrouter",
-    credentials: ["OPENROUTER_MANAGEMENT_KEY"],
+    credentials: ["OPENROUTER_MANAGEMENT_KEY", "OPENROUTER_MGMT_KEY"],
   },
   {
     name: "mc-billing-openai",
     everyMs: 5 * 60_000,
     task: "collect-provider&provider=openai",
-    credentials: ["OPENAI_ADMIN_API_KEY", "OPENAI_API_KEY"],
+    credentials: ["OPENAI_ADMIN_API_KEY"],
   },
   {
     name: "mc-billing-anthropic",
     everyMs: 2 * 60_000,
     task: "collect-provider&provider=anthropic",
-    credentials: ["ANTHROPIC_ADMIN_API_KEY", "ANTHROPIC_API_KEY"],
+    credentials: ["ANTHROPIC_ADMIN_API_KEY"],
   },
   {
     name: "mc-billing-google",
@@ -75,6 +76,13 @@ const PROVIDER_JOBS: Array<
     task: "collect-provider&provider=mistral",
     credentials: ["MISTRAL_API_KEY"],
   },
+  {
+    name: "mc-billing-xai",
+    everyMs: 10 * 60_000,
+    task: "collect-provider&provider=xai",
+    credentials: ["XAI_MANAGEMENT_KEY", "XAI_TEAM_ID"],
+    requireAllCredentials: true,
+  },
 ];
 
 const ALL_MANAGED_JOB_NAMES = new Set<string>([
@@ -85,8 +93,20 @@ const ALL_MANAGED_JOB_NAMES = new Set<string>([
 async function resolveManagedJobs(): Promise<SchedulerJob[]> {
   const jobs: SchedulerJob[] = [...BASE_JOBS];
   for (const providerJob of PROVIDER_JOBS) {
-    const credential = await resolveBillingCredential(providerJob.credentials);
-    if (!credential.value) continue;
+    if (providerJob.requireAllCredentials) {
+      let missing = false;
+      for (const credentialKey of providerJob.credentials) {
+        const credential = await resolveBillingCredential([credentialKey]);
+        if (!credential.value) {
+          missing = true;
+          break;
+        }
+      }
+      if (missing) continue;
+    } else {
+      const credential = await resolveBillingCredential(providerJob.credentials);
+      if (!credential.value) continue;
+    }
     jobs.push({
       name: providerJob.name,
       everyMs: providerJob.everyMs,

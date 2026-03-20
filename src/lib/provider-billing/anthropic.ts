@@ -16,7 +16,7 @@ type AnthropicCostResponse = {
 };
 
 export async function collectAnthropicBilling(): Promise<CollectorResult> {
-  const credential = await resolveBillingCredential(["ANTHROPIC_ADMIN_API_KEY", "ANTHROPIC_API_KEY"]);
+  const credential = await resolveBillingCredential(["ANTHROPIC_ADMIN_API_KEY"]);
   if (!credential.value) {
     const unavailable = defaultCollectorUnavailable("anthropic", credential.requiredCredential);
     await saveProviderCollectorStatus(unavailable);

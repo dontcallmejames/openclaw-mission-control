@@ -86,7 +86,16 @@ export async function fetchOpenRouterPricing(): Promise<Map<string, ModelPricing
       if (!prompt || !completion) continue;
       const inputPer1M = parseFloat(prompt) * 1_000_000;
       const outputPer1M = parseFloat(completion) * 1_000_000;
-      if (!Number.isFinite(inputPer1M) || !Number.isFinite(outputPer1M)) continue;
+      // OpenRouter uses -1 for router/meta models (e.g. openrouter/auto),
+      // meaning there is no fixed unit pricing for that model id.
+      if (
+        !Number.isFinite(inputPer1M) ||
+        !Number.isFinite(outputPer1M) ||
+        inputPer1M < 0 ||
+        outputPer1M < 0
+      ) {
+        continue;
+      }
       newMap.set(m.id, { inputPer1M, outputPer1M });
     }
     cachedMap = newMap;

@@ -9,7 +9,7 @@
  * directly from API routes or lib helpers.
  */
 
-import { getClient } from "./openclaw-client";
+import { getClient, type TransportMode } from "./openclaw-client";
 import type { RunCliResult } from "./openclaw-cli";
 
 export type { RunCliResult } from "./openclaw-cli";
@@ -47,4 +47,9 @@ export async function gatewayCall<T>(
 ): Promise<T> {
   const client = await getClient();
   return client.gatewayRpc<T>(method, params, timeout);
+}
+
+export async function resolveTransport(): Promise<TransportMode> {
+  const client = await getClient();
+  return client.resolveTransport();
 }

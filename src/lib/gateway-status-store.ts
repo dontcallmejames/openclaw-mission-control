@@ -2,6 +2,10 @@ import { useSyncExternalStore } from "react";
 
 export type GatewayHealth = Record<string, unknown> | null;
 export type GatewayStatus = "online" | "degraded" | "offline" | "loading";
+/** Effective runtime transport reported by /api/status (for auto: "http" or "cli"). */
+export type TransportMode = "cli" | "auto" | string | null;
+export type TransportConfigured = "auto" | "cli" | "http" | null;
+export type TransportReason = "forced_cli" | "forced_http" | "auto_http" | "auto_fallback_cli" | null;
 
 type Snapshot = {
   status: GatewayStatus;
@@ -10,6 +14,12 @@ type Snapshot = {
   latencyMs: number | null;
   /** True once at least one full poll cycle has completed (success or failure). */
   initialCheckDone: boolean;
+  /** Effective transport from /api/status — "cli" means CLI fallback is active. */
+  transport: TransportMode;
+  /** Static transport configured by env (OPENCLAW_TRANSPORT). */
+  transportConfigured: TransportConfigured;
+  /** Why this transport mode is active. */
+  transportReason: TransportReason;
 };
 
 const RESTART_EVENT = "gateway-restarting";
@@ -20,6 +30,9 @@ let snapshot: Snapshot = {
   restarting: false,
   latencyMs: null,
   initialCheckDone: false,
+  transport: null,
+  transportConfigured: null,
+  transportReason: null,
 };
 
 const SERVER_SNAPSHOT: Snapshot = {
@@ -28,6 +41,9 @@ const SERVER_SNAPSHOT: Snapshot = {
   restarting: false,
   latencyMs: null,
   initialCheckDone: false,
+  transport: null,
+  transportConfigured: null,
+  transportReason: null,
 };
 
 const VALID_STATUSES = new Set<GatewayStatus>(["online", "degraded", "offline", "loading"]);
@@ -41,13 +57,14 @@ function toGatewayStatus(value: unknown): GatewayStatus {
 
 const listeners = new Set<() => void>();
 let subscribers = 0;
-let pollTimer: ReturnType<typeof setInterval> | null = null;
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let fastPollCount = 0;
 let liteInFlight = false;
 let fullInFlight = false;
 let offlineConsecutiveFailures = 0;
 let tabHidden = false;
+let pollMode: "normal" | "offline" | "fast" = "normal";
 
 function emit() {
   listeners.forEach((listener) => listener());
@@ -69,7 +86,7 @@ async function pollLite() {
     });
     if (!res.ok) {
       setSnapshot({ status: "offline", health: null, latencyMs: null });
-      switchToOfflinePolling();
+      if (fastPollCount === 0) switchToOfflinePolling();
       return;
     }
     const data = await res.json();
@@ -77,15 +94,31 @@ async function pollLite() {
     setSnapshot({
       status: nextStatus,
       latencyMs: typeof data.latencyMs === "number" ? data.latencyMs : null,
+      transport: typeof data.transport === "string" ? data.transport : null,
+      transportConfigured:
+        data.transportConfigured === "auto" ||
+        data.transportConfigured === "cli" ||
+        data.transportConfigured === "http"
+          ? data.transportConfigured
+          : null,
+      transportReason:
+        data.transportReason === "forced_cli" ||
+        data.transportReason === "forced_http" ||
+        data.transportReason === "auto_http" ||
+        data.transportReason === "auto_fallback_cli"
+          ? data.transportReason
+          : null,
     });
-    if (nextStatus === "offline" || nextStatus === "degraded") {
+    if (fastPollCount > 0) {
+      // During restart recovery, keep fast polling until we confirm gateway is back.
+    } else if (nextStatus === "offline" || nextStatus === "degraded") {
       switchToOfflinePolling();
     } else {
       offlineConsecutiveFailures = 0;
     }
   } catch {
     setSnapshot({ status: "offline", health: null, latencyMs: null });
-    switchToOfflinePolling();
+    if (fastPollCount === 0) switchToOfflinePolling();
   } finally {
     liteInFlight = false;
   }
@@ -138,14 +171,16 @@ async function poll() {
 
 function clearPollTimer() {
   if (!pollTimer) return;
-  clearInterval(pollTimer);
+  clearTimeout(pollTimer);
   pollTimer = null;
 }
 
 function switchToNormalPolling() {
+  pollMode = "normal";
   clearPollTimer();
-  pollTimer = setInterval(() => {
-    void pollLite();
+  pollTimer = setTimeout(() => {
+    pollTimer = null;
+    void tickNormal();
   }, 12000);
 }
 
@@ -153,27 +188,67 @@ function switchToNormalPolling() {
 function switchToOfflinePolling() {
   // Don't downgrade from fast polling (restart recovery).
   if (fastPollCount > 0) return;
+  pollMode = "offline";
   clearPollTimer();
   offlineConsecutiveFailures += 1;
   const delay = Math.min(5000 * Math.pow(2, Math.min(offlineConsecutiveFailures - 1, 3)), 30000);
-  pollTimer = setInterval(() => {
-    void poll();
+  pollTimer = setTimeout(() => {
+    pollTimer = null;
+    void tickOffline();
   }, delay);
 }
 
 function switchToFastPolling() {
+  pollMode = "fast";
   clearPollTimer();
   fastPollCount = 1;
-  pollTimer = setInterval(() => {
-    fastPollCount += 1;
-    if (fastPollCount > 30) {
-      fastPollCount = 0;
-      switchToNormalPolling();
-      setSnapshot({ restarting: false });
-      return;
-    }
-    void poll();
+  pollTimer = setTimeout(() => {
+    pollTimer = null;
+    void tickFast();
   }, 2000);
+}
+
+async function tickNormal() {
+  if (pollMode !== "normal" || subscribers <= 0) return;
+  await pollLite();
+  if (pollMode === "normal" && subscribers > 0 && !tabHidden && !pollTimer) {
+    switchToNormalPolling();
+  }
+}
+
+async function tickOffline() {
+  if (pollMode !== "offline" || subscribers <= 0) return;
+  await pollLite();
+  if (pollMode === "offline" && subscribers > 0 && !tabHidden && !pollTimer) {
+    switchToOfflinePolling();
+  }
+}
+
+async function tickFast() {
+  if (pollMode !== "fast" || subscribers <= 0) return;
+  fastPollCount += 1;
+  if (fastPollCount > 30) {
+    fastPollCount = 0;
+    switchToNormalPolling();
+    setSnapshot({ restarting: false });
+    return;
+  }
+  await pollLite();
+  if (pollMode !== "fast") return;
+
+  // During restart recovery, run full health checks less frequently.
+  // If /api/status already reports online, probe full health immediately.
+  if (snapshot.status === "online" || fastPollCount % 8 === 0) {
+    await poll();
+    if (pollMode !== "fast") return;
+  }
+
+  if (!tabHidden && !pollTimer) {
+    pollTimer = setTimeout(() => {
+      pollTimer = null;
+      void tickFast();
+    }, 2000);
+  }
 }
 
 function handleRestartingSignal() {
@@ -192,10 +267,18 @@ function handleVisibilityChange() {
   const hidden = document.visibilityState === "hidden";
   if (tabHidden === hidden) return;
   tabHidden = hidden;
+  if (hidden) {
+    clearPollTimer();
+    return;
+  }
   if (!hidden && subscribers > 0) {
     // Tab became visible — immediately refresh and resume polling.
     void pollLite();
-    if (!pollTimer) switchToNormalPolling();
+    if (!pollTimer) {
+      if (pollMode === "fast") switchToFastPolling();
+      else if (pollMode === "offline") switchToOfflinePolling();
+      else switchToNormalPolling();
+    }
   }
 }
 
@@ -208,7 +291,7 @@ async function start() {
   await pollLite();
   await poll();
   setSnapshot({ initialCheckDone: true });
-  switchToNormalPolling();
+  if (!tabHidden) switchToNormalPolling();
 }
 
 function stop() {
@@ -221,6 +304,7 @@ function stop() {
     clearTimeout(restartTimer);
     restartTimer = null;
   }
+  pollMode = "normal";
   fastPollCount = 0;
   offlineConsecutiveFailures = 0;
   liteInFlight = false;

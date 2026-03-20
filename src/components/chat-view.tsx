@@ -9,6 +9,7 @@ import {
   useMemo,
   useSyncExternalStore,
 } from "react";
+import { useSmartPoll } from "@/hooks/use-smart-poll";
 import { useChat } from "@ai-sdk/react";
 import { TextStreamChatTransport } from "ai";
 import {
@@ -275,12 +276,15 @@ function ChatPanel({
   isPostOnboarding: boolean;
   onClearPostOnboarding: () => void;
 }) {
+  const postOnboardingStarterPrompt = "Say hello and tell me how you can help me today.";
   const timeFormat = useSyncExternalStore(
     subscribeTimeFormatPreference,
     getTimeFormatSnapshot,
     getTimeFormatServerSnapshot,
   );
-  const [inputValue, setInputValue] = useState("");
+  const [inputValue, setInputValue] = useState(() =>
+    isPostOnboarding && isSelected ? postOnboardingStarterPrompt : ""
+  );
   const chatSessionKeyRef = useRef(
     typeof window === "undefined" ? "" : createChatSessionKey(agentId)
   );
@@ -1024,19 +1028,11 @@ export function ChatView({ isVisible = true }: { isVisible?: boolean }) {
     return () => clearTimeout(t);
   }, []);
 
-  // Fetch agents: fast-poll (2s) during warm-up, normal (30s) otherwise
-  useEffect(() => {
-    queueMicrotask(() => {
-      if (isVisible) void fetchBootstrap();
-    });
-    const ms = warmingUp ? 2000 : 30000;
-    const interval = setInterval(() => {
-      if (isVisible && document.visibilityState === "visible") {
-        void fetchBootstrap();
-      }
-    }, ms);
-    return () => clearInterval(interval);
-  }, [fetchBootstrap, isVisible, warmingUp]);
+  // Fetch agents: fast-poll (10s) during warm-up, normal (30s) otherwise
+  useSmartPoll(fetchBootstrap, {
+    intervalMs: warmingUp ? 10000 : 30000,
+    enabled: isVisible,
+  });
 
   useEffect(() => {
     if (!isVisible) return;
@@ -1071,6 +1067,14 @@ export function ChatView({ isVisible = true }: { isVisible?: boolean }) {
     () => agents.find((a) => a.id === selectedAgent),
     [agents, selectedAgent]
   );
+  const currentAgentTitle = currentAgent ? agentDisplayName(currentAgent) : "Agent";
+  const currentAgentModelLabel =
+    currentAgent?.model && currentAgent.model !== "unknown"
+      ? formatModel(currentAgent.model)
+      : "";
+  const showSecondaryModelLabel =
+    Boolean(currentAgentModelLabel) &&
+    currentAgentModelLabel.toLowerCase() !== currentAgentTitle.toLowerCase();
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -1079,11 +1083,11 @@ export function ChatView({ isVisible = true }: { isVisible?: boolean }) {
         <div className="flex items-center gap-2.5">
           <span className="text-sm">{currentAgent?.emoji || "🤖"}</span>
           <span className="text-sm font-medium text-stone-700 dark:text-stone-200">
-            {currentAgent ? agentDisplayName(currentAgent) : "Agent"}
+            {currentAgentTitle}
           </span>
-          {currentAgent?.model && currentAgent.model !== "unknown" && (
+          {showSecondaryModelLabel && (
             <span className="text-xs text-muted-foreground">
-              {formatModel(currentAgent.model)}
+              {currentAgentModelLabel}
             </span>
           )}
         </div>

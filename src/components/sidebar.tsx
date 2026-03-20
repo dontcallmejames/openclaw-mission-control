@@ -40,6 +40,7 @@ import {
   Stethoscope,
   HelpCircle,
   Puzzle,
+  Radio,
 } from "lucide-react";
 import { getChatUnreadCount, subscribeChatStore } from "@/lib/chat-store";
 
@@ -57,7 +58,7 @@ type NavItem = {
 
 const isAgentbayHosting = process.env.NEXT_PUBLIC_AGENTBAY_HOSTED === "true";
 
-const navItems: NavItem[] = [
+const defaultNavItems: NavItem[] = [
   // ── Overview ──
   { group: "Overview", section: "dashboard", label: "Dashboard", icon: LayoutDashboard, href: "/dashboard" },
   { section: "activity", label: "Activity", icon: Activity, href: "/activity" },
@@ -82,6 +83,7 @@ const navItems: NavItem[] = [
   { section: "vectors", label: "Vector DB", icon: Database, href: "/vectors" },
   // ── Configure ──
   { section: "accounts", label: "API Keys", icon: KeyRound, href: "/accounts" },
+  { section: "channels", label: "Channels", icon: Radio, href: "/channels" },
   { section: "security", label: "Security", icon: ShieldCheck, href: "/security" },
   { section: "hooks", label: "Hooks", icon: Webhook, href: "/hooks" },
   { section: "settings", label: "Preferences", icon: Settings2, href: "/settings" },
@@ -94,8 +96,47 @@ const navItems: NavItem[] = [
   { section: "search", label: "Web Search", icon: Search, href: "/search" },
   ...(!isAgentbayHosting ? [{ section: "tailscale", label: "Tailscale", icon: Waypoints, href: "/tailscale", beta: true } as NavItem] : []),
   { section: "config", label: "Config", icon: Settings, href: "/config" },
-  ...(isAgentbayHosting ? [{ section: "help" as const, label: "Help & Support", icon: HelpCircle, href: "/help" } as NavItem] : []),
 ];
+
+const hostedNavItems: NavItem[] = [
+  // ── Core ──
+  { group: "Core", section: "chat", label: "Chat", icon: MessageCircle, href: "/chat" },
+  { section: "channels", label: "Channels", icon: Radio, href: "/channels" },
+  { section: "tasks", label: "Tasks", icon: ListChecks, href: "/tasks" },
+  { section: "skills", label: "Skills", icon: Wrench, href: "/skills" },
+  { section: "accounts", label: "API Keys", icon: KeyRound, href: "/accounts" },
+  { section: "help", label: "Help & Support", icon: HelpCircle, href: "/help" },
+  // ── Overview ──
+  { group: "Overview", section: "dashboard", label: "Dashboard", icon: LayoutDashboard, href: "/dashboard" },
+  { section: "activity", label: "Activity", icon: Activity, href: "/activity" },
+  { section: "usage", label: "Usage", icon: BarChart3, href: "/usage" },
+  // ── Agents ──
+  { group: "Agents", section: "agents", label: "Agents", icon: Users, href: "/agents" },
+  { section: "agents", label: "Models", icon: Cpu, href: "/agents?tab=models", tab: "models", isSubItem: true },
+  { section: "sessions", label: "Sessions", icon: MessageSquare, href: "/sessions" },
+  // ── Work ──
+  { group: "Work", section: "cron", label: "Cron Jobs", icon: Clock, href: "/cron" },
+  // ── Knowledge ──
+  { group: "Knowledge", section: "memory", label: "Memory", icon: Brain, href: "/memory" },
+  { section: "docs", label: "Documents", icon: FolderOpen, href: "/documents" },
+  // ── Configure ──
+  { group: "Configure", section: "settings", label: "Preferences", icon: Settings2, href: "/settings" },
+  // ── Advanced ──
+  { group: "Advanced", section: "agents", label: "Subagents", icon: Users2, href: "/agents?tab=subagents", tab: "subagents" },
+  { section: "skills", label: "ClawHub", icon: Package, href: "/skills?tab=clawhub", tab: "clawhub", group: "Advanced" },
+  { section: "cron", label: "Heartbeat", icon: Heart, href: "/heartbeat", tab: "heartbeat", group: "Advanced" },
+  { section: "vectors", label: "Vector DB", icon: Database, href: "/vectors", group: "Advanced" },
+  { section: "security", label: "Security", icon: ShieldCheck, href: "/security", group: "Advanced" },
+  { section: "hooks", label: "Hooks", icon: Webhook, href: "/hooks", group: "Advanced" },
+  { section: "terminal", label: "Terminal", icon: SquareTerminal, href: "/terminal", group: "Advanced" },
+  { section: "logs", label: "Logs", icon: Terminal, href: "/logs", group: "Advanced" },
+  { section: "browser", label: "Browser Relay", icon: Globe, href: "/browser", group: "Advanced" },
+  { section: "audio", label: "Audio & Voice", icon: Volume2, href: "/audio", group: "Advanced" },
+  { section: "search", label: "Web Search", icon: Search, href: "/search", group: "Advanced" },
+  { section: "config", label: "Config", icon: Settings, href: "/config", group: "Advanced" },
+];
+
+const navItems = isAgentbayHosting ? hostedNavItems : defaultNavItems;
 
 const SIDEBAR_COLLAPSED_KEY = "sidebar_collapsed";
 const SIDEBAR_WIDTH_KEY = "sidebar_width";
@@ -136,6 +177,7 @@ function deriveSectionFromPath(pathname: string): string | null {
     "vectors",
     "skills",
     "accounts",
+    "channels",
     "audio",
     "browser",
     "search",
@@ -178,6 +220,7 @@ function SidebarNav({ onNavigate, collapsed }: { onNavigate?: () => void; collap
   const [skillsExpanded, setSkillsExpanded] = useState(false);
   const [agentsExpanded, setAgentsExpanded] = useState(false);
   const [cronExpanded, setCronExpanded] = useState(false);
+  const [advancedExpanded, setAdvancedExpanded] = useState(false);
   const isClawHubActive = section === "skills" && tab === "clawhub";
   const showSkillsChildren = isClawHubActive ? true : skillsExpanded;
   const isSubagentsActive = section === "agents" && tab === "subagents";
@@ -199,15 +242,9 @@ function SidebarNav({ onNavigate, collapsed }: { onNavigate?: () => void; collap
         const isSkillsParent = item.section === "skills" && item.label === "Skills";
         const isAgentsParent = item.section === "agents" && item.label === "Agents";
         const isCronParent = item.section === "cron" && item.label === "Cron Jobs";
-        if (collapsed && item.isSubItem) return null;
-        if (item.isSubItem && item.section === "skills" && !showSkillsChildren) return null;
-        if (item.isSubItem && item.section === "agents" && !showAgentsChildren) return null;
-        if (item.isSubItem && item.section === "cron" && !showCronChildren) return null;
-
-        // Group header
+        const isAdvancedItem = isAgentbayHosting && item.group === "Advanced";
         const previousGroup = index > 0 ? navItems[index - 1]?.group : undefined;
         const showGroupHeader = item.group && item.group !== previousGroup;
-
         const Icon = item.icon;
         const isActive =
           !item.comingSoon &&
@@ -216,12 +253,34 @@ function SidebarNav({ onNavigate, collapsed }: { onNavigate?: () => void; collap
             ? tab === item.tab
             : (item.section !== "skills" || tab !== "clawhub") &&
               (item.section !== "agents" || (tab !== "subagents" && tab !== "models")));
+        const tourId =
+          !item.isSubItem && item.section === "dashboard"
+            ? "nav-dashboard"
+            : !item.isSubItem && item.section === "chat"
+              ? "nav-chat"
+              : !item.isSubItem && item.section === "tasks"
+                ? "nav-tasks"
+                : !item.isSubItem && item.section === "skills" && item.label === "Skills"
+                  ? "nav-skills"
+                  : !item.isSubItem && item.section === "accounts"
+                    ? "nav-accounts"
+                    : !item.isSubItem && item.section === "channels"
+                      ? "nav-channels"
+                      : undefined;
+
+        if (collapsed && item.isSubItem) return null;
+        if (item.isSubItem && item.section === "skills" && !showSkillsChildren) return null;
+        if (item.isSubItem && item.section === "agents" && !showAgentsChildren) return null;
+        if (item.isSubItem && item.section === "cron" && !showCronChildren) return null;
+        const shouldHideAdvancedItem = isAdvancedItem && !advancedExpanded && !isActive;
+        if (shouldHideAdvancedItem && !showGroupHeader) return null;
+
         const showBadge = item.section === "chat" && chatUnread > 0;
         const isDisabled = item.comingSoon;
         const linkClass = cn(
-          "group relative flex items-center gap-2.5 rounded-md py-1.5 text-sm font-medium transition-colors duration-150",
+          "group relative flex items-center gap-2 rounded-md py-1.5 text-xs font-medium transition-colors duration-150",
           collapsed ? "justify-center px-2" : "px-2.5",
-          item.isSubItem && !collapsed && "ml-6 py-1.5 text-xs",
+          item.isSubItem && !collapsed && "ml-6 py-1",
           isDisabled
             ? "cursor-not-allowed opacity-50 text-stone-400 dark:text-stone-500"
             : isActive
@@ -231,20 +290,32 @@ function SidebarNav({ onNavigate, collapsed }: { onNavigate?: () => void; collap
         return (
           <div key={`${item.section}:${item.label}`}>
             {showGroupHeader && !collapsed && (
-              <div className="mb-1.5 mt-4 first:mt-0 px-2.5 text-[10px] font-semibold uppercase tracking-[0.22em] text-stone-400 dark:text-stone-500">
-                {item.group}
-              </div>
+              isAgentbayHosting && item.group === "Advanced" ? (
+                <button
+                  type="button"
+                  onClick={() => setAdvancedExpanded((prev) => !prev)}
+                  className="mb-1.5 mt-4 first:mt-0 flex w-full items-center justify-between rounded-md px-2.5 py-1 text-xs font-semibold uppercase tracking-widest text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-600 dark:text-stone-500 dark:hover:bg-[#171b1f] dark:hover:text-[#a8b0ba]"
+                  aria-expanded={advancedExpanded}
+                >
+                  <span>Advanced</span>
+                  <ChevronRight className={cn("h-3 w-3 transition-transform", advancedExpanded && "rotate-90")} />
+                </button>
+              ) : (
+                <div className="mb-1.5 mt-4 first:mt-0 px-2.5 text-xs font-semibold uppercase tracking-widest text-stone-400 dark:text-stone-500">
+                  {item.group}
+                </div>
+              )
             )}
             {showGroupHeader && collapsed && (
               <div className="my-2 mx-1 border-t border-stone-200 dark:border-[#23282e]" />
             )}
-            {isDisabled ? (
+            {shouldHideAdvancedItem ? null : isDisabled ? (
               <span className={linkClass} aria-disabled>
-                <Icon className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                <Icon className="h-3 w-3 shrink-0 opacity-60" />
                 {!collapsed && (
                   <>
                     <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                    <span className="shrink-0 whitespace-nowrap rounded-full border border-border bg-muted/50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                    <span className="shrink-0 whitespace-nowrap rounded-full border border-border bg-muted/50 px-1.5 py-0.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
                       Soon
                     </span>
                   </>
@@ -252,13 +323,13 @@ function SidebarNav({ onNavigate, collapsed }: { onNavigate?: () => void; collap
               </span>
             ) : (
               (isSkillsParent || isAgentsParent || isCronParent) && !collapsed ? (
-                <div className={linkClass}>
+                <div className={linkClass} data-tour={tourId}>
                   <Link
                     href={item.href || `/${item.section}`}
                     onClick={onNavigate}
                     className="flex min-w-0 flex-1 items-center gap-2.5"
                   >
-                    <Icon className="h-3.5 w-3.5 shrink-0" />
+                    <Icon className="h-3 w-3 shrink-0" />
                     <span className="flex-1">{item.label}</span>
                   </Link>
                   <button
@@ -296,17 +367,18 @@ function SidebarNav({ onNavigate, collapsed }: { onNavigate?: () => void; collap
                   href={item.href || `/${item.section}`}
                   onClick={onNavigate}
                   className={linkClass}
+                  data-tour={tourId}
                   title={collapsed ? item.label : undefined}
                 >
                   <span className="relative inline-flex shrink-0">
-                    <Icon className="h-3.5 w-3.5" />
+                    <Icon className="h-3 w-3" />
                     {collapsed && showBadge && (
                     <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-stone-900 ring-2 ring-sidebar dark:bg-stone-100" title={`${chatUnread} unread`} aria-hidden />
                   )}
                 </span>
                 {!collapsed && <span className="flex-1">{item.label}</span>}
                 {!collapsed && item.beta && (
-                    <span className="shrink-0 rounded-sm bg-stone-100 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider text-stone-400 dark:bg-[#1c2128] dark:text-[#5a6270]">
+                    <span className="shrink-0 rounded-sm bg-stone-100 px-1.5 py-0.5 font-mono text-xs font-semibold uppercase tracking-wider text-stone-400 dark:bg-[#1c2128] dark:text-[#5a6270]">
                       beta
                     </span>
                   )}
@@ -436,6 +508,7 @@ export function Sidebar() {
 
       {/* Sidebar — always visible on desktop, slide-in drawer on mobile */}
       <aside
+        data-tour="sidebar"
         style={expandedWidthStyle}
         className={cn(
           "relative flex h-full shrink-0 flex-col transition-[width,transform] duration-200 ease-in-out",
@@ -471,11 +544,11 @@ export function Sidebar() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-bold tracking-tight text-stone-900 dark:text-[#f5f7fa]">
+                    <span className="text-xs font-bold tracking-tight text-stone-900 dark:text-[#f5f7fa]">
                       Mission Control
                     </span>
                     {commitHash && (
-                      <span className="shrink-0 rounded-full bg-stone-100 px-2 py-0.5 text-[10px] font-mono font-medium text-stone-500 dark:bg-[#171a1d] dark:text-[#7a8591]">
+                      <span className="shrink-0 rounded-full bg-stone-100 px-1.5 py-0.5 text-xs font-mono font-medium text-stone-500 dark:bg-[#171a1d] dark:text-[#7a8591]">
                         {commitHash}
                       </span>
                     )}
@@ -495,7 +568,7 @@ export function Sidebar() {
             onClick={toggleCollapsed}
             className={cn(
               "flex w-full items-center rounded-md py-1.5 text-stone-400 transition-colors duration-150 hover:bg-stone-100 hover:text-stone-700 dark:text-[#7a8591] dark:hover:bg-[#171b1f] dark:hover:text-[#d6dce3]",
-              collapsed ? "justify-center px-0" : "gap-2 px-2"
+              collapsed ? "justify-center px-0" : "justify-start px-2.5"
             )}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -503,10 +576,7 @@ export function Sidebar() {
             {collapsed ? (
               <ChevronRight className="h-4 w-4 shrink-0" />
             ) : (
-              <>
-                <ChevronLeft className="h-4 w-4 shrink-0" />
-                <span className="text-xs font-medium">Collapse</span>
-              </>
+              <ChevronLeft className="h-4 w-4 shrink-0" />
             )}
           </button>
         </div>

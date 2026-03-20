@@ -16,6 +16,7 @@ export type UsageActivityPoint = {
 };
 
 export type ProviderBillingFreshness = "fresh" | "stale" | "unknown";
+export type ProviderBillingMode = "invoice_api" | "estimate_only";
 
 export type ProviderBillingRow = {
   accountScope: string;
@@ -35,6 +36,9 @@ export type ProviderBillingProviderSnapshot = {
   available: boolean;
   reason?: string;
   requiredCredential?: string;
+  billingMode: ProviderBillingMode;
+  docsUrl?: string;
+  setupHint?: string;
   freshness: ProviderBillingFreshness;
   bucketGranularity: "day" | null;
   latestBucketStartMs: number | null;
@@ -114,6 +118,7 @@ export type UsageApiResponse = {
   };
   providerBilling: {
     providers: ProviderBillingProviderSnapshot[];
+    configuredProviders: string[];
   };
   reconciliation: {
     summary: ReconciliationSummary;

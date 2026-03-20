@@ -480,7 +480,6 @@ export async function POST(request: NextRequest) {
         {
           raw: JSON.stringify({ tools: { elevated: { enabled } } }),
           baseHash,
-          restartDelayMs: 2000,
         },
         12000
       );

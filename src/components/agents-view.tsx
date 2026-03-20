@@ -63,6 +63,7 @@ import { SubagentsManagerView } from "@/components/subagents-manager-view";
 import { ModelsView } from "@/components/models-view";
 
 const POSITIONS_STORAGE_KEY = "mc-agents-node-positions";
+const AGENT_ORDER_STORAGE_KEY = "mc-agents-order";
 
 function loadSavedPositions(): Record<string, { x: number; y: number }> {
   if (typeof window === "undefined") return {};
@@ -86,6 +87,44 @@ function clearSavedPositions() {
   try {
     localStorage.removeItem(POSITIONS_STORAGE_KEY);
   } catch { /* ignore */ }
+}
+
+function loadSavedAgentOrder(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(AGENT_ORDER_STORAGE_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(parsed)
+      ? parsed.map((v) => String(v || "").trim()).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveAgentOrder(order: string[]) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(AGENT_ORDER_STORAGE_KEY, JSON.stringify(order));
+  } catch {
+    // ignore localStorage errors
+  }
+}
+
+function applySavedOrder(agents: Agent[], order: string[]): Agent[] {
+  if (order.length === 0) return agents;
+  const rank = new Map<string, number>();
+  for (let i = 0; i < order.length; i += 1) {
+    rank.set(order[i], i);
+  }
+  return [...agents].sort((a, b) => {
+    const ra = rank.has(a.id) ? (rank.get(a.id) as number) : Number.MAX_SAFE_INTEGER;
+    const rb = rank.has(b.id) ? (rank.get(b.id) as number) : Number.MAX_SAFE_INTEGER;
+    if (ra !== rb) return ra - rb;
+    if (a.isDefault && !b.isDefault) return -1;
+    if (!a.isDefault && b.isDefault) return 1;
+    return a.name.localeCompare(b.name);
+  });
 }
 
 /* ================================================================
@@ -846,10 +885,12 @@ function AgentDetail({
   agent,
   idx,
   allAgents,
+  onUpdated,
 }: {
   agent: Agent;
   idx: number;
   allAgents: Agent[];
+  onUpdated: () => Promise<void>;
 }) {
   const sc = STATUS_COLORS[agent.status] || STATUS_COLORS.unknown;
 
@@ -867,6 +908,43 @@ function AgentDetail({
   );
 
   const [showIdentity, setShowIdentity] = useState(false);
+  const [identityDraft, setIdentityDraft] = useState(agent.identitySnippet || "");
+  const [editingIdentity, setEditingIdentity] = useState(false);
+  const [savingIdentity, setSavingIdentity] = useState(false);
+  const [identityError, setIdentityError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setIdentityDraft(agent.identitySnippet || "");
+    setEditingIdentity(false);
+    setIdentityError(null);
+  }, [agent.id, agent.identitySnippet]);
+
+  const saveIdentityMarkdown = useCallback(async () => {
+    setSavingIdentity(true);
+    setIdentityError(null);
+    try {
+      const response = await fetch("/api/agents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "save-identity-markdown",
+          id: agent.id,
+          workspace: agent.workspace,
+          markdown: identityDraft,
+        }),
+      });
+      const json = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(json.error || `HTTP ${response.status}`);
+      }
+      await onUpdated();
+      setEditingIdentity(false);
+    } catch (error) {
+      setIdentityError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingIdentity(false);
+    }
+  }, [agent.id, agent.workspace, identityDraft, onUpdated]);
 
   return (
     <div className="rounded-xl border border-foreground/10 bg-card p-5 space-y-4">
@@ -924,7 +1002,7 @@ function AgentDetail({
       {/* Grid */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {/* Model Stack */}
-        <div className="rounded-lg border border-foreground/10 bg-card/80 p-3 space-y-2">
+        <div className="min-w-0 rounded-lg border border-foreground/10 bg-card/80 p-3 space-y-2">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground/70">
             <Layers className="h-3.5 w-3.5 text-[var(--accent-brand-text)]" /> Model Stack
           </div>
@@ -972,7 +1050,10 @@ function AgentDetail({
             <CopyBtn text={agent.workspace} />
           </div>
           <p className="text-xs text-muted-foreground/60">
-            Agent dir: <code className="text-muted-foreground">{agent.agentDir}</code>
+            Agent dir:{" "}
+            <code className="text-muted-foreground wrap-break-word break-all">
+              {agent.agentDir}
+            </code>
           </p>
         </div>
 
@@ -1013,32 +1094,80 @@ function AgentDetail({
       <AgentIntegrationsPanel agentId={agent.id} agentName={agent.name} />
 
       {/* Identity */}
-      {agent.identitySnippet && (
-        <div className="rounded-lg border border-foreground/10 bg-card/80">
-          <button
-            type="button"
-            onClick={() => setShowIdentity(!showIdentity)}
-            className="flex w-full items-center gap-1.5 px-3 py-2 text-left"
-          >
-            <Bot className="h-3.5 w-3.5 text-pink-400" />
-            <span className="flex-1 text-xs font-semibold text-foreground/70">
-              Identity
-            </span>
-            {showIdentity ? (
-              <ChevronUp className="h-3 w-3 text-muted-foreground/60" />
-            ) : (
-              <ChevronDown className="h-3 w-3 text-muted-foreground/60" />
-            )}
-          </button>
-          {showIdentity && (
-            <div className="border-t border-foreground/5 px-3 py-2">
-              <pre className="whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
-                {agent.identitySnippet}
-              </pre>
-            </div>
+      <div className="rounded-lg border border-foreground/10 bg-card/80">
+        <button
+          type="button"
+          onClick={() => setShowIdentity(!showIdentity)}
+          className="flex w-full items-center gap-1.5 px-3 py-2 text-left"
+        >
+          <Bot className="h-3.5 w-3.5 text-pink-400" />
+          <span className="flex-1 text-xs font-semibold text-foreground/70">
+            Identity
+          </span>
+          {showIdentity ? (
+            <ChevronUp className="h-3 w-3 text-muted-foreground/60" />
+          ) : (
+            <ChevronDown className="h-3 w-3 text-muted-foreground/60" />
           )}
-        </div>
-      )}
+        </button>
+        {showIdentity && (
+          <div className="space-y-2 border-t border-foreground/5 px-3 py-2">
+            {editingIdentity ? (
+              <textarea
+                value={identityDraft}
+                onChange={(e) => setIdentityDraft(e.target.value)}
+                rows={8}
+                className="w-full rounded-md border border-foreground/10 bg-foreground/5 px-2 py-1.5 font-mono text-xs leading-relaxed text-foreground focus:border-[var(--accent-brand-border)] focus:outline-none"
+                placeholder="Write IDENTITY.md content..."
+                disabled={savingIdentity}
+              />
+            ) : (
+              <pre className="whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
+                {identityDraft || "No IDENTITY.md content yet."}
+              </pre>
+            )}
+            {identityError && (
+              <p className="text-xs text-red-300">{identityError}</p>
+            )}
+            <div className="flex items-center justify-end gap-2">
+              {editingIdentity ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIdentityDraft(agent.identitySnippet || "");
+                      setEditingIdentity(false);
+                      setIdentityError(null);
+                    }}
+                    disabled={savingIdentity}
+                    className="rounded-md border border-foreground/10 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-foreground/5 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void saveIdentityMarkdown();
+                    }}
+                    disabled={savingIdentity}
+                    className="rounded-md bg-[var(--accent-brand)] px-2.5 py-1 text-xs font-medium text-[var(--accent-brand-on)] transition-opacity disabled:opacity-50"
+                  >
+                    {savingIdentity ? "Saving..." : "Save IDENTITY.md"}
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setEditingIdentity(true)}
+                  className="rounded-md border border-foreground/10 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-foreground/5"
+                >
+                  Edit
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2093,7 +2222,7 @@ function ChannelBindingPicker({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: "add",
+          action: "connect",
           channel: selectedChannel.channel,
           token: tokenInput.trim(),
           appToken: appTokenInput.trim() || undefined,
@@ -2981,6 +3110,7 @@ function EditAgentModal({
   defaultModel,
   onClose,
   onSaved,
+  onMove,
   onChannelsChanged,
 }: {
   agent: Agent;
@@ -2989,6 +3119,7 @@ function EditAgentModal({
   defaultModel: string;
   onClose: () => void;
   onSaved: () => void;
+  onMove: (agentId: string, direction: "up" | "down") => Promise<void>;
   onChannelsChanged?: () => void;
 }) {
   /* ── derive initial bindings in channel:accountId format ── */
@@ -3165,6 +3296,22 @@ function EditAgentModal({
     }
   }, [agent.id, deleteConfirmText, onClose, onSaved]);
 
+  const moveAgent = useCallback(
+    async (direction: "up" | "down") => {
+      if (busy || deleting) return;
+      setBusy(true);
+      setError(null);
+      try {
+        await onMove(agent.id, direction);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [agent.id, busy, deleting, onMove]
+  );
+
   /* ── Save ── */
   const handleSave = useCallback(async () => {
     setBusy(true);
@@ -3330,6 +3477,33 @@ function EditAgentModal({
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
           {/* 1. Identity + default */}
           <div className="space-y-3 rounded-lg border border-foreground/10 bg-foreground/[0.02] p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-foreground/70">Agent order</p>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void moveAgent("up");
+                  }}
+                  disabled={mutating || idx <= 0}
+                  className="rounded-md border border-foreground/10 px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-foreground/5 disabled:opacity-40"
+                  title="Move agent up"
+                >
+                  Move up
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void moveAgent("down");
+                  }}
+                  disabled={mutating || idx >= allAgents.length - 1}
+                  className="rounded-md border border-foreground/10 px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-foreground/5 disabled:opacity-40"
+                  title="Move agent down"
+                >
+                  Move down
+                </button>
+              </div>
+            </div>
             <label className="block text-xs font-semibold text-foreground/70">
               Display Name (dashboard label)
               <input
@@ -4145,6 +4319,7 @@ export function AgentsView() {
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [selectedWorkspacePath, setSelectedWorkspacePath] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [savedAgentOrder, setSavedAgentOrder] = useState<string[]>(loadSavedAgentOrder);
 
   const handleAgentClick = useCallback((id: string) => {
     setSelectedId(id);
@@ -4177,20 +4352,53 @@ export function AgentsView() {
       const res = await fetch("/api/agents", { cache: "no-store", signal: AbortSignal.timeout(10000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
-      setData(json);
+      const orderedAgents = applySavedOrder(
+        Array.isArray(json.agents) ? json.agents : [],
+        savedAgentOrder
+      );
+      setData({
+        ...json,
+        agents: orderedAgents,
+      });
       setError(null);
       setSelectedId((prev) => {
-        if (prev && json.agents.some((a: Agent) => a.id === prev)) return prev;
-        if (json.agents.length === 0) return null;
-        const def = json.agents.find((a: Agent) => a.isDefault);
-        return def?.id || json.agents[0].id;
+        if (prev && orderedAgents.some((a: Agent) => a.id === prev)) return prev;
+        if (orderedAgents.length === 0) return null;
+        const def = orderedAgents.find((a: Agent) => a.isDefault);
+        return def?.id || orderedAgents[0].id;
       });
     } catch (err) {
       setError(String(err));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [savedAgentOrder]);
+
+  const reorderAgents = useCallback(
+    async (agentId: string, direction: "up" | "down") => {
+      if (!data) return;
+      const ids = data.agents.map((a) => a.id);
+      const index = ids.indexOf(agentId);
+      if (index < 0) return;
+      const nextIndex = direction === "up" ? index - 1 : index + 1;
+      if (nextIndex < 0 || nextIndex >= ids.length) return;
+      const reordered = [...ids];
+      const tmp = reordered[index];
+      reordered[index] = reordered[nextIndex];
+      reordered[nextIndex] = tmp;
+      setSavedAgentOrder(reordered);
+      saveAgentOrder(reordered);
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              agents: applySavedOrder(prev.agents, reordered),
+            }
+          : prev
+      );
+    },
+    [data]
+  );
 
   useEffect(() => {
     fetchAgents();
@@ -4388,6 +4596,7 @@ export function AgentsView() {
               agent={selectedAgent}
               idx={selectedIdx}
               allAgents={data.agents}
+              onUpdated={fetchAgents}
             />
           )}
         </SectionBody>
@@ -4419,6 +4628,7 @@ export function AgentsView() {
           onSaved={() => {
             void fetchAgents();
           }}
+          onMove={reorderAgents}
           onChannelsChanged={() => {
             void fetchAgents();
           }}

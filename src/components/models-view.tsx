@@ -219,13 +219,16 @@ function ModelList({
 function AddProviderWizard({
   onClose,
   onDone,
+  initialProviderId,
 }: {
   onClose: () => void;
   onDone: () => void;
+  initialProviderId?: string | null;
 }) {
+  const initialProvider = initialProviderId ? findProvider(initialProviderId) : undefined;
   const [wizard, setWizard] = useState<WizardState>({
-    step: "pick",
-    providerId: null,
+    step: initialProvider ? "key" : "pick",
+    providerId: initialProvider?.id ?? null,
     apiKey: "",
     error: null,
     models: [],
@@ -851,7 +854,7 @@ function ActiveModelBanner({
 
 function Toast({ message, onClose }: { message: string; onClose: () => void }) {
   return (
-    <div className="animate-modal-in fixed bottom-6 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-3 rounded-xl border border-red-500/20 bg-[#1d2227] px-4 py-3 shadow-2xl">
+    <div className="animate-modal-in fixed bottom-6 left-1/2 z-60 flex -translate-x-1/2 items-center gap-3 rounded-xl border border-red-500/20 bg-[#1d2227] px-4 py-3 shadow-2xl">
       <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
       <span className="whitespace-nowrap text-sm text-[#f5f7fa]">{message}</span>
       <button
@@ -870,6 +873,7 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
 export function ModelsView() {
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [showWizard, setShowWizard] = useState(false);
+  const [wizardProviderId, setWizardProviderId] = useState<string | null>(null);
   const [pickerProvider, setPickerProvider] = useState<Provider | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -917,6 +921,16 @@ export function ModelsView() {
     void fetchSummary();
   }
 
+  function openProviderWizard(providerId?: string) {
+    setWizardProviderId(providerId ?? null);
+    setShowWizard(true);
+  }
+
+  function closeProviderWizard() {
+    setShowWizard(false);
+    setWizardProviderId(null);
+  }
+
   const configuredProviders = summary?.configuredProviders ?? [];
   const primaryModel = summary?.defaults?.primary ?? null;
   const unconnectedProviders = PROVIDERS.filter((p) => !configuredProviders.includes(p.id));
@@ -932,7 +946,7 @@ export function ModelsView() {
             configuredProviders.length > 0 ? (
               <button
                 type="button"
-                onClick={() => setShowWizard(true)}
+                  onClick={() => openProviderWizard()}
                 className="flex items-center gap-1.5 rounded-lg bg-[#34d399] px-3 py-2 text-sm font-semibold text-[#0d1117] transition-all hover:bg-[#2dbe8c]"
               >
                 <Plus className="h-4 w-4 shrink-0" />
@@ -946,7 +960,7 @@ export function ModelsView() {
           <div className="space-y-6">
             {/* Active model banner — only show after data loads */}
             {summary !== null && (
-              <ActiveModelBanner model={primaryModel} onAddProvider={() => setShowWizard(true)} />
+              <ActiveModelBanner model={primaryModel} onAddProvider={() => openProviderWizard()} />
             )}
 
             {/* Connected providers */}
@@ -1010,7 +1024,7 @@ export function ModelsView() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowWizard(true)}
+                  onClick={() => openProviderWizard()}
                   className="flex items-center gap-2 rounded-lg bg-[#34d399] px-4 py-2.5 text-sm font-semibold text-[#0d1117] transition-all hover:bg-[#2dbe8c]"
                 >
                   <Plus className="h-4 w-4 shrink-0" />
@@ -1030,7 +1044,7 @@ export function ModelsView() {
                     <button
                       key={p.id}
                       type="button"
-                      onClick={() => setShowWizard(true)}
+                      onClick={() => openProviderWizard(p.id)}
                       className="group flex flex-col items-start gap-2 rounded-xl border border-[#2c343d] bg-[#15191d] p-3 text-left transition-all hover:border-[#3d4752] hover:bg-[#1d2227]"
                     >
                       <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#2c343d] bg-[#20252a] text-xs font-bold text-[#a8b0ba]">
@@ -1052,7 +1066,8 @@ export function ModelsView() {
       {/* Add provider wizard modal */}
       {showWizard && (
         <AddProviderWizard
-          onClose={() => setShowWizard(false)}
+          initialProviderId={wizardProviderId}
+          onClose={closeProviderWizard}
           onDone={handleWizardDone}
         />
       )}

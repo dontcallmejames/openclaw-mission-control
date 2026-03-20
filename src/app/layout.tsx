@@ -10,7 +10,10 @@ import { ChatNotificationToast } from "@/components/chat-notification-toast";
 import { SetupGate } from "@/components/setup-gate";
 import { UsageAlertMonitor } from "@/components/usage-alert-monitor";
 import { OpenClawUpdateBanner } from "@/components/openclaw-update-banner";
+import { MissionControlUpdateBanner } from "@/components/mission-control-update-banner";
+import { CliModeBanner } from "@/components/cli-mode-banner";
 import { ToastRenderer } from "@/components/toast-renderer";
+import { DashboardTourGate } from "@/components/dashboard-tour-gate";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -22,15 +25,20 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const isHosted = process.env.AGENTBAY_HOSTED === "true";
+const isHosted =
+  process.env.AGENTBAY_HOSTED === "true" ||
+  process.env.NEXT_PUBLIC_AGENTBAY_HOSTED === "true";
 
 export const metadata: Metadata = {
-  title: "Mission Control — OpenClaw GUI Dashboard for Local AI Agents",
-  description:
-    "Mission Control is the open-source OpenClaw GUI and AI agent dashboard. " +
-    "Monitor, chat with, and manage your local AI agents, models, cron jobs, " +
-    "vector memory, and skills — all from a single local AI management tool " +
-    "that runs entirely on your machine.",
+  title: isHosted
+    ? "Your AI Agent — AgentBay"
+    : "Mission Control — OpenClaw GUI Dashboard for Local AI Agents",
+  description: isHosted
+    ? "Chat with and manage your AI agent from one dashboard in AgentBay."
+    : "Mission Control is the open-source OpenClaw GUI and AI agent dashboard. " +
+      "Monitor, chat with, and manage your local AI agents, models, cron jobs, " +
+      "vector memory, and skills — all from a single local AI management tool " +
+      "that runs entirely on your machine.",
   keywords: [
     "OpenClaw GUI",
     "AI agent dashboard",
@@ -49,26 +57,32 @@ export const metadata: Metadata = {
     "private AI",
   ],
   manifest: isHosted ? undefined : "/manifest.json",
-  applicationName: "Mission Control",
+  applicationName: isHosted ? "AgentBay" : "Mission Control",
   authors: [{ name: "OpenClaw" }],
   creator: "OpenClaw",
   publisher: "OpenClaw",
   category: "technology",
   openGraph: {
     type: "website",
-    siteName: "Mission Control — OpenClaw GUI",
-    title: "Mission Control — The AI Agent Dashboard for OpenClaw",
-    description:
-      "Monitor, chat with, and manage your local AI agents from one sleek dashboard. " +
-      "Open-source, self-hosted, zero cloud. The ultimate OpenClaw GUI.",
+    siteName: isHosted ? "AgentBay" : "Mission Control — OpenClaw GUI",
+    title: isHosted
+      ? "Your AI Agent — AgentBay"
+      : "Mission Control — The AI Agent Dashboard for OpenClaw",
+    description: isHosted
+      ? "Chat with and manage your AI agent from one dashboard in AgentBay."
+      : "Monitor, chat with, and manage your local AI agents from one sleek dashboard. " +
+        "Open-source, self-hosted, zero cloud. The ultimate OpenClaw GUI.",
     locale: "en_US",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Mission Control — OpenClaw GUI & AI Agent Dashboard",
-    description:
-      "Open-source local AI management tool. Monitor agents, models, cron jobs, " +
-      "vector memory and more — entirely on your machine.",
+    title: isHosted
+      ? "Your AI Agent — AgentBay"
+      : "Mission Control — OpenClaw GUI & AI Agent Dashboard",
+    description: isHosted
+      ? "Chat with and manage your AI agent from one dashboard in AgentBay."
+      : "Open-source local AI management tool. Monitor agents, models, cron jobs, " +
+        "vector memory and more — entirely on your machine.",
   },
   appleWebApp: {
     capable: true,
@@ -84,8 +98,6 @@ export const viewport: Viewport = {
   themeColor: "#101214",
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
 };
 
 export default function RootLayout({
@@ -109,14 +121,20 @@ export default function RootLayout({
               <Sidebar />
               <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
                 <Header />
-                <main className="flex flex-1 overflow-hidden bg-stone-50 dark:bg-[#101214]">
+                <CliModeBanner />
+                <main
+                  data-tour="main-content"
+                  className="flex flex-1 overflow-hidden bg-stone-50 dark:bg-[#101214]"
+                >
                   {children}
                 </main>
               </div>
             </div>
+            <DashboardTourGate />
             <AgentChatPanel />
             <ChatNotificationToast />
             {!isHosted && <OpenClawUpdateBanner />}
+            {!isHosted && <MissionControlUpdateBanner />}
             <UsageAlertMonitor />
             <ToastRenderer />
           </SetupGate>

@@ -27,6 +27,10 @@ export class HttpTransport implements OpenClawClient {
     return "http";
   }
 
+  async resolveTransport(): Promise<TransportMode> {
+    return "http";
+  }
+
   private async getGwUrl(): Promise<string> {
     if (this.gatewayUrlCache) return this.gatewayUrlCache;
     this.gatewayUrlCache = await getGatewayUrl();
