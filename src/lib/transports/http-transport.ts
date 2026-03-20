@@ -15,12 +15,15 @@ import type { OpenClawClient, TransportMode } from "../openclaw-client";
 
 export class HttpTransport implements OpenClawClient {
   private token: string;
+  private rpcToken: string;
   private gatewayUrlCache: string | null = null;
   private rpcClient: GatewayRpcClient | null = null;
 
   constructor(gatewayUrl?: string, token?: string) {
     this.token = token || process.env.OPENCLAW_GATEWAY_TOKEN || "";
     this.gatewayUrlCache = gatewayUrl || null;
+    // Allow a separate token for WS RPC (needs operator scopes); falls back to main token.
+    this.rpcToken = process.env.OPENCLAW_GATEWAY_RPC_TOKEN || this.token;
   }
 
   getTransport(): TransportMode {
@@ -212,7 +215,7 @@ export class HttpTransport implements OpenClawClient {
     timeout = 15000,
   ): Promise<T> {
     if (!this.rpcClient) {
-      this.rpcClient = new GatewayRpcClient(this.gatewayUrlCache || undefined, this.token);
+      this.rpcClient = new GatewayRpcClient(this.gatewayUrlCache || undefined, this.rpcToken);
     }
     return this.rpcClient.request<T>(method, params || {}, timeout);
   }
