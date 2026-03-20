@@ -253,16 +253,6 @@ export class HttpTransport implements OpenClawClient {
     params?: Record<string, unknown>,
     timeout = 15000,
   ): Promise<T> {
-    // Map RPC method → openclaw CLI subcommand
-    const cliMap: Record<string, string[]> = {
-      "cron.list": ["cron", "list"],
-      "status": ["status"],
-      "usage.status": ["usage", "status"],
-      "channels.status": ["channels", "status"],
-      "sessions.list": ["sessions", "--all-agents"],
-      "device.pair.list": ["devices", "list"],
-    };
-
     // config.get: read directly from disk
     if (method === "config.get") {
       return this.configGetViaCli<T>(timeout);
@@ -281,6 +271,18 @@ export class HttpTransport implements OpenClawClient {
       return emptyStubs[method] as T;
     }
 
+    // Fast file-based fallbacks — avoid CLI spawn overhead (~5s per call due to plugin init)
+    if (method === "sessions.list") return this.sessionsListFromFiles<T>();
+    if (method === "device.pair.list") return this.deviceListFromFiles<T>();
+    if (method === "cron.list") return this.cronListFromFiles<T>();
+
+    // Remaining methods with CLI equivalents (used less frequently)
+    const cliMap: Record<string, string[]> = {
+      "status": ["status"],
+      "usage.status": ["usage", "status"],
+      "channels.status": ["channels", "status"],
+    };
+
     const cliArgs = cliMap[method];
     if (!cliArgs) {
       throw new Error(`gatewayRpc: no CLI fallback for method '${method}' (missing scope: operator.read)`);
@@ -288,6 +290,73 @@ export class HttpTransport implements OpenClawClient {
 
     const raw = await this.execLocal(`openclaw ${cliArgs.join(" ")} --json`, timeout);
     return parseJsonFromCliOutput<T>(raw, `openclaw ${cliArgs.join(" ")} --json`);
+  }
+
+  private async sessionsListFromFiles<T>(): Promise<T> {
+    const { readFile, readdir } = await import("fs/promises");
+    const { join } = await import("path");
+    const home = process.env.OPENCLAW_STATE_DIR || join(process.env.HOME || "/root", ".openclaw");
+    const agentsDir = join(home, "agents");
+    const allSessions: unknown[] = [];
+    try {
+      const agents = await readdir(agentsDir, { withFileTypes: true });
+      for (const agent of agents) {
+        if (!agent.isDirectory()) continue;
+        const sessionsPath = join(agentsDir, agent.name, "sessions", "sessions.json");
+        try {
+          const raw = await readFile(sessionsPath, "utf-8");
+          const data = JSON.parse(raw) as Record<string, unknown>;
+          for (const session of Object.values(data)) {
+            if (session && typeof session === "object") {
+              allSessions.push({ agentId: agent.name, ...(session as object) });
+            }
+          }
+        } catch { /* skip missing */ }
+      }
+    } catch { /* agents dir missing */ }
+    const now = Date.now();
+    const sessions = allSessions.map((s) => {
+      const sess = s as Record<string, unknown>;
+      const updatedAt = typeof sess.updatedAt === "number" ? sess.updatedAt : 0;
+      return { ...sess, ageMs: now - updatedAt };
+    }).sort((a, b) => ((b as Record<string,unknown>).updatedAt as number || 0) - ((a as Record<string,unknown>).updatedAt as number || 0));
+    return { count: sessions.length, sessions } as unknown as T;
+  }
+
+  private async deviceListFromFiles<T>(): Promise<T> {
+    const { readFile } = await import("fs/promises");
+    const { join } = await import("path");
+    const home = process.env.OPENCLAW_STATE_DIR || join(process.env.HOME || "/root", ".openclaw");
+    const pairedPath = join(home, "devices", "paired.json");
+    const pendingPath = join(home, "devices", "pending.json");
+    let paired: unknown[] = [];
+    let pending: unknown[] = [];
+    try {
+      const raw = await readFile(pairedPath, "utf-8");
+      const data = JSON.parse(raw) as Record<string, unknown>;
+      paired = Object.values(data);
+    } catch { /* no paired devices */ }
+    try {
+      const raw = await readFile(pendingPath, "utf-8");
+      const data = JSON.parse(raw) as Record<string, unknown> | unknown[];
+      pending = Array.isArray(data) ? data : Object.values(data);
+    } catch { /* no pending devices */ }
+    return { paired, pending } as unknown as T;
+  }
+
+  private async cronListFromFiles<T>(): Promise<T> {
+    const { readFile } = await import("fs/promises");
+    const { join } = await import("path");
+    const home = process.env.OPENCLAW_STATE_DIR || join(process.env.HOME || "/root", ".openclaw");
+    const cronPath = join(home, "cron", "jobs.json");
+    try {
+      const raw = await readFile(cronPath, "utf-8");
+      const data = JSON.parse(raw) as { jobs?: unknown[] };
+      const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+      return { jobs, total: jobs.length, offset: 0, limit: jobs.length, hasMore: false } as unknown as T;
+    } catch {
+      return { jobs: [], total: 0, offset: 0, limit: 0, hasMore: false } as unknown as T;
+    }
   }
 
   private async configGetViaCli<T>(timeout = 15000): Promise<T> {
