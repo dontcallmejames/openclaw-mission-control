@@ -227,7 +227,43 @@ export class HttpTransport implements OpenClawClient {
     if (!this.rpcClient) {
       this.rpcClient = new GatewayRpcClient(this.gatewayUrlCache || undefined, this.rpcToken);
     }
-    return this.rpcClient.request<T>(method, params || {}, timeout);
+
+    try {
+      return await this.rpcClient.request<T>(method, params || {}, timeout);
+    } catch (err: unknown) {
+      // If the WS RPC fails due to missing scope, fall back to the CLI.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("missing scope") || msg.includes("operator.read") || msg.includes("operator.admin")) {
+        return this.gatewayRpcViaCli<T>(method, params, timeout);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Fall back to running an openclaw CLI command that mirrors an RPC method.
+   * Only covers the subset of methods that have CLI equivalents.
+   */
+  private async gatewayRpcViaCli<T>(
+    method: string,
+    params?: Record<string, unknown>,
+    timeout = 15000,
+  ): Promise<T> {
+    // Map RPC method → openclaw CLI subcommand
+    const cliMap: Record<string, string[]> = {
+      "cron.list": ["cron", "list"],
+      "status": ["status"],
+      "usage.status": ["usage", "status"],
+      "channels.status": ["channels", "status"],
+    };
+
+    const cliArgs = cliMap[method];
+    if (!cliArgs) {
+      throw new Error(`gatewayRpc: no CLI fallback for method '${method}' (missing scope: operator.read)`);
+    }
+
+    const raw = await this.execLocal(`openclaw ${cliArgs.join(" ")} --json`, timeout);
+    return parseJsonFromCliOutput<T>(raw, `openclaw ${cliArgs.join(" ")} --json`);
   }
 
   private async configGetViaCli<T>(timeout = 15000): Promise<T> {
