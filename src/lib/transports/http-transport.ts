@@ -214,14 +214,18 @@ export class HttpTransport implements OpenClawClient {
     params?: Record<string, unknown>,
     timeout = 15000,
   ): Promise<T> {
-    // config.get / config.schema require operator.read/admin scope on WS,
-    // but gateway.auth.token doesn't grant those. Serve locally instead.
-    if (method === "config.get") {
-      return this.configGetViaCli<T>(timeout);
-    }
-    if (method === "config.schema") {
-      // Return empty schema — config page degrades gracefully without it.
-      return { schema: {}, uiHints: {} } as unknown as T;
+    // Methods that require operator.read/admin scope on WS, which gateway.auth.token
+    // doesn't grant. Short-circuit directly to local fallbacks — skip WS entirely.
+    // This avoids a ~10s timeout waiting for WS auth before the fallback kicks in.
+    const SCOPE_LIMITED_METHODS = new Set([
+      "config.get", "config.schema",
+      "cron.list", "sessions.list", "device.pair.list",
+      "status", "usage.status", "channels.status",
+      "tts.status", "tts.providers", "tts.enable", "tts.disable", "tts.setProvider",
+    ]);
+
+    if (SCOPE_LIMITED_METHODS.has(method)) {
+      return this.gatewayRpcViaCli<T>(method, params, timeout);
     }
 
     if (!this.rpcClient) {
@@ -259,8 +263,14 @@ export class HttpTransport implements OpenClawClient {
       "device.pair.list": ["devices", "list"],
     };
 
+    // config.get: read directly from disk
+    if (method === "config.get") {
+      return this.configGetViaCli<T>(timeout);
+    }
+
     // Methods with no CLI equivalent: return empty stubs so pages degrade gracefully
     const emptyStubs: Record<string, unknown> = {
+      "config.schema":  { schema: {}, uiHints: {} },
       "tts.status":     { enabled: false, provider: null, prefsPath: "" },
       "tts.providers":  { providers: [] },
       "tts.enable":     { ok: true },
