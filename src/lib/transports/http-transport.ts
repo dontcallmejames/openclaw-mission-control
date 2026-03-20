@@ -255,7 +255,21 @@ export class HttpTransport implements OpenClawClient {
       "status": ["status"],
       "usage.status": ["usage", "status"],
       "channels.status": ["channels", "status"],
+      "sessions.list": ["sessions", "--all-agents"],
+      "device.pair.list": ["devices", "list"],
     };
+
+    // Methods with no CLI equivalent: return empty stubs so pages degrade gracefully
+    const emptyStubs: Record<string, unknown> = {
+      "tts.status":     { enabled: false, provider: null, prefsPath: "" },
+      "tts.providers":  { providers: [] },
+      "tts.enable":     { ok: true },
+      "tts.disable":    { ok: true },
+      "tts.setProvider":{ ok: true },
+    };
+    if (method in emptyStubs) {
+      return emptyStubs[method] as T;
+    }
 
     const cliArgs = cliMap[method];
     if (!cliArgs) {
